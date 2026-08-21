@@ -1,7 +1,7 @@
 // ctyun.js - 天翼云电脑 Web 版纯协议保活（Cloudflare Workers 移植版）
 // 移植自 ctyun_keepalive.py：REST 登录 + WebSocket 保活 + RSA-OAEP/REDQ 校验。
 
-import { sha256Hex, md5Hex, base64ToBytes, bytesToHex, utf8ToBytes } from "./crypto.js";
+import { sha256Hex, md5Hex, base64ToBytes, bytesToBase64, bytesToHex, utf8ToBytes } from "./crypto.js";
 import { SendInfo, Encryption } from "./framing.js";
 
 const ORC_URL = "https://orc.1999111.xyz/ocr";
