@@ -413,13 +413,17 @@ export async function runAccount(api, account, keepAliveSeconds, log) {
 
   // 尝试复用缓存会话
   const cached = await api.loadSession(account.user);
+  let desktopList = null;
   if (cached) {
     api.loginInfo = cached;
+    // getDesktopList 成功返回数组(含空数组)、失败返回 null，故用非 null 判断会话有效
     const test = await api.getDesktopList();
-    if (test && test.code === 0) {
+    if (test !== null) {
       log(`[${account.user}] 使用缓存会话`);
+      desktopList = test; // 复用校验结果，避免重复请求
     } else {
       api.loginInfo = null;
+      log(`[${account.user}] 缓存会话已失效，重新登录`);
     }
   }
 
@@ -440,7 +444,7 @@ export async function runAccount(api, account, keepAliveSeconds, log) {
     return result;
   }
 
-  const desktopList = await api.getDesktopList();
+  if (desktopList === null) desktopList = await api.getDesktopList();
   if (!desktopList || desktopList.length === 0) {
     result.error = "未获取到云电脑";
     log(`[${account.user}] 未获取到云电脑`);
