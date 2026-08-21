@@ -408,7 +408,7 @@ function keepaliveWorker(api, account, desktop, keepAliveSeconds, desktopInfo, l
 }
 
 // ---- 单账号完整流程 ----
-export async function runAccount(api, account, keepAliveSeconds, log) {
+export async function runAccount(api, account, keepAliveSeconds, log, prevStatus) {
   const result = { user: account.user, ok: false, desktops: [], error: "" };
 
   // 尝试复用缓存会话
@@ -451,16 +451,29 @@ export async function runAccount(api, account, keepAliveSeconds, log) {
     return result;
   }
 
-  // 构建云电脑状态快照（用于页面展示：台数 / 状态 / 是否在线）
+  // 构建云电脑状态快照（用于页面展示：台数 / 状态 / 是否在线 / 保活起始 / 已在线时长）
   const statusMap = new Map();
+  const prevDesktops =
+    prevStatus && Array.isArray(prevStatus.desktops) ? prevStatus.desktops : [];
+  const prevById = new Map(prevDesktops.map((d) => [d.desktopId, d]));
+  const runStart = Date.now();
   for (const d of desktopList) {
+    const prev = prevById.get(d.desktopId);
+    const online = d.useStatusText === "运行中";
+    // 在线起始时刻：若之前就在线上则沿用旧值（跨运行累计），否则以本次运行起点记
+    let onlineSince = null;
+    if (online) {
+      onlineSince = prev && prev.online && prev.onlineSince ? prev.onlineSince : runStart;
+    }
     statusMap.set(d.desktopId, {
       desktopId: d.desktopId,
       desktopCode: d.desktopCode || "",
       name: d.desktopName || d.computerName || d.desktopCode || "(未命名)",
       status: d.useStatusText || "未知",
-      online: d.useStatusText === "运行中",
+      online,
       keptAlive: false,
+      onlineSince,
+      keepAliveStart: prev ? prev.keepAliveStart || null : null,
     });
   }
 
@@ -482,7 +495,10 @@ export async function runAccount(api, account, keepAliveSeconds, log) {
     if (conn && conn.code === 0 && conn.data?.desktopInfo) {
       desktop._desktopInfo = conn.data.desktopInfo;
       active.push(desktop);
-      if (st) st.keptAlive = true;
+      if (st) {
+        st.keptAlive = true;
+        st.keepAliveStart = runStart;
+      }
       log(`[${account.user}][${desktop.desktopCode}] 已获取连接信息`);
     } else {
       log(`[${account.user}][${desktop.desktopCode}] 连接失败: ${conn?.msg}`);

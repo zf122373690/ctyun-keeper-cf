@@ -47,6 +47,16 @@ export const adminHtml = `<!doctype html>
   .tag.ok{color:var(--ok);border-color:rgba(34,197,94,.4)}
   .tag.warn{color:var(--warn);border-color:rgba(245,158,11,.4)}
   .tag.err{color:var(--danger);border-color:rgba(239,68,68,.4)}
+  /* 云电脑状态卡片 */
+  .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px;margin-top:4px}
+  .pc-card{background:#0f172a;border:1px solid var(--border);border-radius:10px;padding:12px;position:relative;min-height:104px}
+  .pc-card .pc-name{font-size:14px;font-weight:600;color:#e2e8f0;margin-right:64px;word-break:break-all}
+  .pc-card .pc-code{color:var(--muted);font-size:12px;margin-top:3px}
+  .pc-card .pc-acc{color:var(--muted);font-size:11px;margin-top:6px}
+  .pc-card .pc-meta{margin-top:10px;font-size:12px;color:#cbd5e1;line-height:1.8}
+  .pc-card .pc-meta b{color:var(--muted);font-weight:500;margin-right:4px}
+  .pc-badge{position:absolute;top:12px;right:12px}
+  .pc-empty{color:var(--muted)}
   #logBox{background:#0f172a;border:1px solid var(--border);border-radius:8px;
     height:300px;overflow:auto;padding:10px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
     font-size:12px;white-space:pre-wrap;line-height:1.6}
@@ -150,6 +160,7 @@ export const adminHtml = `<!doctype html>
     return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});}
 
   var editingId=null;
+  var tickStarted=false;
 
   function toast(msg){
     var t=$('#toast'); t.textContent=msg; t.classList.add('show');
@@ -189,37 +200,78 @@ export const adminHtml = `<!doctype html>
 
   function renderPc(accounts){
     var wrap=$('#pcBody');
-    var rows=[];
+    var cards=[];
     (accounts||[]).forEach(function(a){
       var st=a.status;
       if(!st)return;
       var ds=st.desktops||[];
       if(ds.length===0){
         if(st.error){
-          rows.push({account:a.name||a.user,name:'—',code:'—',status:st.error,online:false,kept:false,err:true});
+          cards.push(cardHtml(a.name||a.user,'—','—',st.error,false,false,null,null,true));
         }
         return;
       }
       ds.forEach(function(d){
-        rows.push({account:a.name||a.user,name:d.name,code:d.desktopCode,status:d.status,online:!!d.online,kept:!!d.keptAlive,err:false});
+        cards.push(cardHtml(a.name||a.user,d.name,d.desktopCode,d.status,!!d.online,!!d.keptAlive,d.onlineSince||null,d.keepAliveStart||null,false));
       });
     });
-    if(!rows.length){
-      wrap.innerHTML='<div style="color:var(--muted)">暂无云电脑状态数据，运行一次后显示。</div>';
+    if(!cards.length){
+      wrap.innerHTML='<div class="pc-empty">暂无云电脑状态数据，运行一次后显示。</div>';
       return;
     }
-    var html='<table><thead><tr><th>账号</th><th>云电脑</th><th>编号</th><th>状态</th><th>保活</th></tr></thead><tbody>';
-    rows.forEach(function(r){
-      var statusTag = r.online
-        ? '<span class="tag ok">在线 · '+esc(r.status||'运行中')+'</span>'
-        : '<span class="tag '+(r.err?'err':'warn')+'">'+esc(r.status||'离线')+'</span>';
-      var kept = r.kept
-        ? '<span class="tag ok">保活中</span>'
-        : (r.err?'<span class="tag">—</span>':'<span class="tag warn">未接管</span>');
-      html+='<tr><td>'+esc(r.account)+'</td><td>'+esc(r.name)+'</td><td>'+esc(r.code)+'</td><td>'+statusTag+'</td><td>'+kept+'</td></tr>';
+    wrap.innerHTML='<div class="cards">'+cards.join('')+'</div>';
+    tickDurations();
+  }
+
+  function cardHtml(account,name,code,status,online,kept,onlineSince,keepAliveStart,isErr){
+    var badge = online
+      ? '<span class="tag ok pc-badge">在线 · '+(esc(status)||'运行中')+'</span>'
+      : '<span class="tag '+(isErr?'err':'warn')+' pc-badge">'+esc(status||'离线')+'</span>';
+    var dur = (online && onlineSince)
+      ? '<span class="pc-dur" data-since="'+onlineSince+'">计算中…</span>'
+      : (isErr ? '—' : '未运行');
+    var keepLine = isErr ? '' :
+      '<div><b>本次</b>'+(kept
+        ? '<span class="tag ok" style="padding:1px 6px">保活中</span>'
+        : '<span class="tag warn" style="padding:1px 6px">未接管</span>')+'</div>';
+    return '<div class="pc-card">'+badge+
+      '<div class="pc-name">'+esc(name)+'</div>'+
+      '<div class="pc-code">编号：'+esc(code)+'</div>'+
+      '<div class="pc-acc">账号：'+esc(account)+'</div>'+
+      '<div class="pc-meta">'+
+        '<div><b>保活始于</b>'+(keepAliveStart?fmtTime(keepAliveStart):'—')+'</div>'+
+        '<div><b>已在线</b>'+dur+'</div>'+
+        keepLine+
+      '</div>'+
+    '</div>';
+  }
+
+  function fmtTime(ts){
+    if(!ts)return '—';
+    var d=new Date(ts);
+    function p(n){return (n<10?'0':'')+n;}
+    return (d.getMonth()+1)+'-'+p(d.getDate())+' '+p(d.getHours())+':'+p(d.getMinutes())+':'+p(d.getSeconds());
+  }
+
+  function fmtDuration(ms){
+    if(!(ms>0))return '0秒';
+    var s=Math.floor(ms/1000);
+    var d=Math.floor(s/86400); s-=d*86400;
+    var h=Math.floor(s/3600); s-=h*3600;
+    var m=Math.floor(s/60); s-=m*60;
+    if(d>0)return d+'天'+h+'小时'+m+'分';
+    if(h>0)return h+'小时'+m+'分';
+    if(m>0)return m+'分'+s+'秒';
+    return s+'秒';
+  }
+
+  function tickDurations(){
+    var els=document.querySelectorAll('.pc-dur');
+    var now=Date.now();
+    els.forEach(function(el){
+      var since=parseInt(el.getAttribute('data-since'),10);
+      if(since)el.textContent=fmtDuration(now-since);
     });
-    html+='</tbody></table>';
-    wrap.innerHTML=html;
   }
 
   async function loadKvStats(){
@@ -406,6 +458,8 @@ export const adminHtml = `<!doctype html>
       loadKvStats();
       // 云电脑状态每 30 秒自动刷新（仅 GET /api/state，KV 只读不写，免费）
       setInterval(function(){loadState().catch(function(){});},30000);
+      // 「已在线」时长每秒刷新一次（仅前端计算，不请求后端）
+      if(!tickStarted){tickStarted=true;setInterval(tickDurations,1000);}
       // 日志仅在手动「立即运行」时通过流式实时展示，无需轮询 KV
     }catch(e){showLogin('');}
   }

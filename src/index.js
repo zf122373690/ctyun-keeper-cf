@@ -244,8 +244,9 @@ export async function runAll(env, trigger, logFn) {
       continue;
     }
     const deviceCode = await resolveDeviceCode(kv, acc);
+    const prevStatus = await getAccountStatus(kv, acc.user);
     const api = new CtYunApi(deviceCode, kv, log);
-    const r = await runAccount(api, acc, keepAliveSeconds, log);
+    const r = await runAccount(api, acc, keepAliveSeconds, log, prevStatus);
     results.push(r);
   }
 
