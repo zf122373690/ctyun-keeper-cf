@@ -94,16 +94,7 @@ node --check src/*.js             # 单文件语法校验
 - **Cron 频率**：默认每分钟一次（`*/1 * * * *`）。高频 Cron + 较长保活窗口在标准版够用（单账号保活窗口建议 ≤ 55s，与 Cron 间隔匹配）；多账号或超长窗口可能触达 CPU/时长限制，按需升级 Workers 付费版。
 - **WebSocket 不能带自定义请求头**：Workers 的 `WebSocket` 客户端无法设置 `Origin`/`ctg-*` 头（REST 部分可以，WS 不行）。实测 ctyun WS 服务端容忍缺 Origin，但不同账号/服务端可能行为不同。
 
-## 七、关于另外两个版本（ecloud / soho）
-
-`ctyun_keepalive.py`（天翼）是三者里唯一纯 WebSocket 方案，已完整移植。
-`ecloud_enterprise.py`、`soho_keepalive.py` 保活核心是**裸 TCP**（ZTEC 握手 + SPICE 网关 / H3C gRPC），
-标准/免费版 Workers 没有 TCP 能力。要上 Cloudflare 有两条路（待定）：
-
-- **Workers 付费版 + Sockets API（$5/月）**：可补齐 TCP，但 H3C 的 gRPC-over-HTTP/2 实现复杂；
-- **Cloudflare Containers**：完整容器+网络，甚至能直接跑原来的 Python。
-
-## 八、仓库状态
+## 七、仓库状态
 
 - 公开仓库：https://github.com/zf122373690/ctyun-keeper-cf
 - 真实账号/密码只存 Cloudflare KV（`config` 键），**不进 git**；仓库内 `config.example.json` 仅为占位符。
