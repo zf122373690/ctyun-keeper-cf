@@ -96,6 +96,7 @@ export const adminHtml = `<!doctype html>
       <div class="btnrow">
         <button id="saveSettings">保存设置</button>
         <button id="runBtn" class="ghost">立即运行一次</button>
+        <span id="kvStat" class="tag" style="margin-left:8px"></span>
         <span id="runState" class="tag" style="margin-left:auto"></span>
       </div>
     </div>
@@ -126,7 +127,7 @@ export const adminHtml = `<!doctype html>
     </div>
 
     <div class="panel">
-      <h2>执行日志</h2>
+      <h2>执行日志 <button id="clearLogs" class="ghost" style="float:right;padding:4px 10px;font-size:12px">清空日志</button></h2>
       <div id="logBox"></div>
     </div>
   </div>
@@ -171,6 +172,15 @@ export const adminHtml = `<!doctype html>
     $('#keepAliveSeconds').value=d.keepAliveSeconds||55;
     renderAccounts(d.accounts||[]);
     renderLastRun(d.lastRun);
+  }
+
+  async function loadKvStats(){
+    try{
+      var r=await api('/api/kv/stats'); var d=await r.json();
+      var list=d.stats||[];
+      var total=list.reduce(function(s,k){return s+(k.bytes>0?k.bytes:0);},0);
+      $('#kvStat').textContent='KV 占用 '+(total/1024).toFixed(1)+' KB · '+list.length+' 键';
+    }catch(e){}
   }
 
   function renderAccounts(list){
@@ -300,6 +310,13 @@ export const adminHtml = `<!doctype html>
     else{toast(d.error||'启动失败');}
   }
 
+  async function clearLogs(){
+    if(!confirm('确认清空执行日志？这只会删除 KV 中的 logs 键，不影响账号与配置。'))return;
+    var r=await api('/api/logs/clear',{method:'POST'});
+    if(r.ok){toast('日志已清空');await loadLogs();await loadKvStats();}
+    else{toast('清空失败');}
+  }
+
   function showLogin(msg){
     $('#app').hidden=true;
     $('#login').style.display='flex';
@@ -317,8 +334,9 @@ export const adminHtml = `<!doctype html>
       await loadState();
       hideLogin();
       loadLogs();
+      loadKvStats();
       if(logTimer)clearInterval(logTimer);
-      logTimer=setInterval(loadLogs,2500);
+      logTimer=setInterval(loadLogs,5000);
     }catch(e){showLogin('');}
   }
 
@@ -333,6 +351,7 @@ export const adminHtml = `<!doctype html>
   $('#cancelEdit').onclick=resetForm;
   $('#saveSettings').onclick=saveSettings;
   $('#runBtn').onclick=runNow;
+  $('#clearLogs').onclick=clearLogs;
 
   boot();
 })();

@@ -2,7 +2,9 @@
 // 路由：
 //   GET  /              管理后台（暗色主题单页）
 //   GET  /api/state     仪表盘数据（账号列表/设置/最近一次运行）
-//   GET  /api/logs      执行日志（环形，封顶 300）
+//   GET  /api/logs      执行日志（仅手动运行写入 KV；Cron 只打 console）
+//   POST /api/logs/clear 清空日志（回收 KV 空间）
+//   GET  /api/kv/stats  KV 各键占用诊断
 //   POST /api/accounts  新增账号
 //   PUT  /api/accounts/:id  修改账号（密码留空=不变）
 //   DELETE /api/accounts/:id 删除账号
@@ -130,6 +132,38 @@ app.post("/api/settings", async (c) => {
   return c.json({ ok: true, keepAliveSeconds: sec });
 });
 
+// ---- 清空日志（回收 KV 空间）----
+app.post("/api/logs/clear", async (c) => {
+  const kv = c.env.CTYUN_KV;
+  if (!kv) return c.json({ error: "未绑定 KV" }, 500);
+  await kv.delete("logs");
+  return c.json({ ok: true });
+});
+
+// ---- KV 各键占用诊断 ----
+app.get("/api/kv/stats", async (c) => {
+  const kv = c.env.CTYUN_KV;
+  if (!kv) return c.json({ error: "未绑定 KV" }, 500);
+  let listed = [];
+  try {
+    const r = await kv.list();
+    listed = r.keys || [];
+  } catch {
+    listed = [];
+  }
+  const stats = [];
+  for (const k of listed) {
+    try {
+      const v = await kv.get(k.name);
+      stats.push({ name: k.name, bytes: v ? v.length : 0 });
+    } catch {
+      stats.push({ name: k.name, bytes: -1 });
+    }
+  }
+  stats.sort((a, b) => b.bytes - a.bytes);
+  return c.json({ stats });
+});
+
 // ---- 立即运行（异步，结果看日志面板）----
 app.post("/api/run", async (c) => {
   const env = c.env;
@@ -137,23 +171,28 @@ app.post("/api/run", async (c) => {
   return c.json({ ok: true, started: true, message: "保活任务已启动，请查看日志面板" });
 });
 
-// ---- 核心：跑全部账号保活，并把日志增量刷写 KV ----
+// ---- 核心：跑全部账号保活 ----
+// Cron 每分钟触发，若每轮都把日志写 KV 会迅速打满免费版 KV 写入额度(1000/天)。
+// 因此 Cron 运行只打 console 日志（wrangler tail 可见），仅「手动运行」才把日志写进 KV 供网页查看。
+// lastRun 对 Cron 节流（≥10 分钟才写一次），进一步压低写入量。
 export async function runAll(env, trigger) {
   const kv = env.CTYUN_KV;
   if (!kv) return { ok: false, error: "未绑定 KV 命名空间 CTYUN_KV" };
 
   const logger = new RunLog();
   const log = (m) => logger.info(m);
-  const flush = () => appendLogs(kv, logger.drain());
-  const flushTimer = setInterval(flush, 3000); // 长保活窗口内也能实时看到日志
+  const writeLogsToKv = trigger === "manual";
+  const flush = async () => {
+    const entries = logger.drain();
+    if (writeLogsToKv && entries.length) await appendLogs(kv, entries);
+  };
 
   const cfg = await loadConfig(kv);
   const accounts = cfg.accounts || [];
   const keepAliveSeconds = Math.max(10, cfg.keepAliveSeconds || 60);
 
-  logger.info(
-    `开始保活（触发=${trigger}，账号数=${accounts.length}，时长=${keepAliveSeconds}s）`
-  );
+  log(`开始保活（触发=${trigger}，账号数=${accounts.length}，时长=${keepAliveSeconds}s）`);
+  if (writeLogsToKv) await flush();
 
   const results = [];
   for (const acc of accounts) {
@@ -165,10 +204,8 @@ export async function runAll(env, trigger) {
     const api = new CtYunApi(deviceCode, kv, log);
     const r = await runAccount(api, acc, keepAliveSeconds, log);
     results.push(r);
+    if (writeLogsToKv) await flush();
   }
-
-  clearInterval(flushTimer);
-  await flush();
 
   const summary = {
     trigger,
@@ -177,9 +214,20 @@ export async function runAll(env, trigger) {
     accountCount: accounts.length,
     results,
   };
-  await setLastRun(kv, summary);
-  logger.info("本轮保活结束");
-  await flush();
+  log("本轮保活结束");
+  if (writeLogsToKv) await flush();
+
+  // lastRun：手动运行必写；Cron 节流，避免每日 KV 写入超免费额度
+  let writeLastRun = true;
+  if (trigger === "cron") {
+    const metaRaw = await kv.get("lastRunMeta");
+    const last = metaRaw ? JSON.parse(metaRaw).ts || 0 : 0;
+    if (Date.now() - last < 10 * 60 * 1000) writeLastRun = false;
+  }
+  if (writeLastRun) {
+    await setLastRun(kv, summary);
+    await kv.put("lastRunMeta", JSON.stringify({ ts: Date.now() }));
+  }
   return summary;
 }
 

@@ -30,7 +30,7 @@ export class RunLog {
 }
 
 // 把一批日志追加进 KV，并裁剪到 max 条（环形）
-export async function appendLogs(kv, entries, max = 300) {
+export async function appendLogs(kv, entries, max = 150) {
   if (!kv || !entries || entries.length === 0) return;
   try {
     const raw = await kv.get("logs");
