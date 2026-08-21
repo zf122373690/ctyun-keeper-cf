@@ -31,9 +31,10 @@ import {
   updateAccount,
   deleteAccount,
   setKeepAlive,
-  maskAccounts,
   getLastRun,
   setLastRun,
+  getAccountStatus,
+  setAccountStatus,
 } from "./config.js";
 
 const app = new Hono();
@@ -65,10 +66,32 @@ app.get("/api/state", async (c) => {
   if (!kv) return c.json({ error: "未绑定 KV 命名空间 CTYUN_KV" }, 500);
   const cfg = await loadConfig(kv);
   const lastRun = await getLastRun(kv);
+  const accounts = [];
+  let totalPc = 0;
+  let onlinePc = 0;
+  for (const a of cfg.accounts) {
+    const masked = {
+      id: a.id,
+      name: a.name,
+      user: a.user,
+      hasPassword: !!a.password,
+      password: a.password ? "********" : "",
+      deviceCode: a.deviceCode ? "已设置" : "未设置",
+    };
+    const st = await getAccountStatus(kv, a.user);
+    if (st) {
+      masked.status = st;
+      const ds = st.desktops || [];
+      totalPc += ds.length;
+      onlinePc += ds.filter((d) => d.online).length;
+    }
+    accounts.push(masked);
+  }
   return c.json({
     keepAliveSeconds: cfg.keepAliveSeconds,
-    accounts: maskAccounts(cfg),
+    accounts,
     lastRun,
+    pcSummary: { total: totalPc, online: onlinePc },
   });
 });
 
@@ -246,6 +269,24 @@ export async function runAll(env, trigger, logFn) {
   if (writeLastRun) {
     await setLastRun(kv, summary);
     await kv.put("lastRunMeta", JSON.stringify({ ts: Date.now() }));
+  }
+
+  // 云电脑状态（账号信息，允许写入 KV）：手动运行必写；
+  // Cron 与 lastRun 共用节流（≥10 分钟一次），避免打满 KV 写入额度。
+  const writeStatus = trigger === "manual" || writeLastRun;
+  if (writeStatus) {
+    for (const r of results) {
+      const payload = {
+        ts: summary.ts,
+        user: r.user,
+        ok: !!r.ok,
+        error: r.error || "",
+        desktops: Array.isArray(r.desktops) ? r.desktops : [],
+      };
+      if (payload.desktops.length > 0 || payload.error) {
+        await setAccountStatus(kv, r.user, payload);
+      }
+    }
   }
   return summary;
 }

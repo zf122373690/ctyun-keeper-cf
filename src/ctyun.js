@@ -451,8 +451,22 @@ export async function runAccount(api, account, keepAliveSeconds, log) {
     return result;
   }
 
+  // 构建云电脑状态快照（用于页面展示：台数 / 状态 / 是否在线）
+  const statusMap = new Map();
+  for (const d of desktopList) {
+    statusMap.set(d.desktopId, {
+      desktopId: d.desktopId,
+      desktopCode: d.desktopCode || "",
+      name: d.desktopName || d.computerName || d.desktopCode || "(未命名)",
+      status: d.useStatusText || "未知",
+      online: d.useStatusText === "运行中",
+      keptAlive: false,
+    });
+  }
+
   const active = [];
   for (const desktop of desktopList) {
+    const st = statusMap.get(desktop.desktopId);
     if (desktop.useStatusText !== "运行中") {
       log(`[${account.user}] 云电脑状态: ${desktop.useStatusText}，尝试开机`);
       const pr = await api.powerOn(desktop.desktopId);
@@ -468,6 +482,7 @@ export async function runAccount(api, account, keepAliveSeconds, log) {
     if (conn && conn.code === 0 && conn.data?.desktopInfo) {
       desktop._desktopInfo = conn.data.desktopInfo;
       active.push(desktop);
+      if (st) st.keptAlive = true;
       log(`[${account.user}][${desktop.desktopCode}] 已获取连接信息`);
     } else {
       log(`[${account.user}][${desktop.desktopCode}] 连接失败: ${conn?.msg}`);
@@ -476,6 +491,7 @@ export async function runAccount(api, account, keepAliveSeconds, log) {
 
   if (active.length === 0) {
     result.error = "没有可保活的云电脑";
+    result.desktops = Array.from(statusMap.values());
     return result;
   }
 
@@ -493,9 +509,6 @@ export async function runAccount(api, account, keepAliveSeconds, log) {
   } catch (e) {
     result.error = String(e);
   }
-  result.desktops = active.map((d) => ({
-    desktopCode: d.desktopCode,
-    desktopId: d.desktopId,
-  }));
+  result.desktops = Array.from(statusMap.values());
   return result;
 }

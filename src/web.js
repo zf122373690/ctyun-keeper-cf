@@ -102,6 +102,11 @@ export const adminHtml = `<!doctype html>
     </div>
 
     <div class="panel">
+      <h2>云电脑状态 <span id="pcSummary" class="tag" style="margin-left:8px"></span></h2>
+      <div id="pcBody"><div style="color:var(--muted)">暂无数据，运行一次后显示。</div></div>
+    </div>
+
+    <div class="panel">
       <h2>账号列表</h2>
       <table>
         <thead><tr><th>名称</th><th>账号</th><th>密码</th><th>设备码</th><th>操作</th></tr></thead>
@@ -171,6 +176,50 @@ export const adminHtml = `<!doctype html>
     $('#keepAliveSeconds').value=d.keepAliveSeconds||55;
     renderAccounts(d.accounts||[]);
     renderLastRun(d.lastRun);
+    renderPc(d.accounts||[]);
+    renderPcSummary(d.pcSummary);
+  }
+
+  function renderPcSummary(s){
+    var el=$('#pcSummary');
+    if(!s||s.total===0){el.className='tag';el.textContent='共 0 台';return;}
+    el.className='tag '+(s.online===s.total?'ok':'warn');
+    el.textContent='共 '+s.total+' 台 · 在线 '+s.online+' 台';
+  }
+
+  function renderPc(accounts){
+    var wrap=$('#pcBody');
+    var rows=[];
+    (accounts||[]).forEach(function(a){
+      var st=a.status;
+      if(!st)return;
+      var ds=st.desktops||[];
+      if(ds.length===0){
+        if(st.error){
+          rows.push({account:a.name||a.user,name:'—',code:'—',status:st.error,online:false,kept:false,err:true});
+        }
+        return;
+      }
+      ds.forEach(function(d){
+        rows.push({account:a.name||a.user,name:d.name,code:d.desktopCode,status:d.status,online:!!d.online,kept:!!d.keptAlive,err:false});
+      });
+    });
+    if(!rows.length){
+      wrap.innerHTML='<div style="color:var(--muted)">暂无云电脑状态数据，运行一次后显示。</div>';
+      return;
+    }
+    var html='<table><thead><tr><th>账号</th><th>云电脑</th><th>编号</th><th>状态</th><th>保活</th></tr></thead><tbody>';
+    rows.forEach(function(r){
+      var statusTag = r.online
+        ? '<span class="tag ok">在线 · '+esc(r.status||'运行中')+'</span>'
+        : '<span class="tag '+(r.err?'err':'warn')+'">'+esc(r.status||'离线')+'</span>';
+      var kept = r.kept
+        ? '<span class="tag ok">保活中</span>'
+        : (r.err?'<span class="tag">—</span>':'<span class="tag warn">未接管</span>');
+      html+='<tr><td>'+esc(r.account)+'</td><td>'+esc(r.name)+'</td><td>'+esc(r.code)+'</td><td>'+statusTag+'</td><td>'+kept+'</td></tr>';
+    });
+    html+='</tbody></table>';
+    wrap.innerHTML=html;
   }
 
   async function loadKvStats(){
@@ -321,11 +370,13 @@ export const adminHtml = `<!doctype html>
         }
       }
       if(buf.length)appendLogLine(buf);
+      try{await loadState();}catch(_){}
       $('#runState').className='tag ok';
       $('#runState').textContent='运行完成';
     }catch(e){
       if(e.message==='unauthorized')return;
       // 流中断也视为结束
+      try{await loadState();}catch(_){}
       $('#runState').className='tag ok';
       $('#runState').textContent='运行结束';
     }
@@ -353,6 +404,8 @@ export const adminHtml = `<!doctype html>
       await loadState();
       hideLogin();
       loadKvStats();
+      // 云电脑状态每 30 秒自动刷新（仅 GET /api/state，KV 只读不写，免费）
+      setInterval(function(){loadState().catch(function(){});},30000);
       // 日志仅在手动「立即运行」时通过流式实时展示，无需轮询 KV
     }catch(e){showLogin('');}
   }

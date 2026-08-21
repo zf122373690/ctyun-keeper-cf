@@ -141,3 +141,18 @@ export async function setLastRun(kv, data) {
   if (!kv) return;
   await kv.put("lastRun", JSON.stringify(data));
 }
+
+// ---- 云电脑状态（按账号快照，允许写入 KV；与 lastRun 共用 Cron 节流）----
+export async function getAccountStatus(kv, user) {
+  try {
+    const raw = await kv.get("status:" + user);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function setAccountStatus(kv, user, data) {
+  if (!kv) return;
+  await kv.put("status:" + user, JSON.stringify(data));
+}
