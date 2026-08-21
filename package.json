@@ -5,8 +5,11 @@
   "type": "module",
   "description": "天翼云电脑 Web 版纯协议保活 - Cloudflare Workers 移植版",
   "scripts": {
-    "test": "node test/crypto.test.mjs",
+    "test": "node test/crypto.test.mjs && node test/store.test.mjs",
     "deploy": "wrangler deploy",
     "dev": "wrangler dev"
+  },
+  "dependencies": {
+    "hono": "^4.6.0"
   }
 }
