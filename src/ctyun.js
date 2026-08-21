@@ -107,22 +107,30 @@ export class CtYunApi {
       this.log("正在识别验证码...");
       const b64 = bytesToBase64(imgBytes);
       const boundary = "----WebKitFormBoundary7MA4YWxkTrZu0gW";
+      // 注意：multipart 分隔符必须是 "--" + boundary（与原 Python 一致）
       const body =
-        `${boundary}\r\nContent-Disposition: form-data; name="image"\r\n\r\n` +
-        `${b64}\r\n${boundary}--\r\n`;
+        `--${boundary}\r\n` +
+        `Content-Disposition: form-data; name="image"\r\n\r\n` +
+        `${b64}\r\n` +
+        `--${boundary}--\r\n`;
       const ctrl = new AbortController();
       const t = setTimeout(() => ctrl.abort(), 30000);
       const resp = await fetch(ORC_URL, {
         method: "POST",
         headers: {
           "Content-Type": `multipart/form-data; boundary=${boundary}`,
+          "User-Agent": UA,
+          "ctg-devicetype": DEVICE_TYPE,
+          "ctg-version": VERSION,
+          "ctg-devicecode": this.deviceCode,
+          "referer": "https://pc.ctyun.cn/",
         },
         body,
         signal: ctrl.signal,
       });
       clearTimeout(t);
       const result = await resp.json();
-      const text = result?.data ?? "";
+      const text = (result?.data ?? "").toString().trim();
       this.log(`识别结果: ${text}`);
       return text;
     } catch (ex) {
