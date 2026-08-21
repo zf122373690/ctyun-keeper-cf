@@ -83,7 +83,7 @@ export const adminHtml = `<!doctype html>
 
   <div class="wrap" id="app" hidden>
     <h1>天翼云电脑保活</h1>
-    <div class="sub">Cloudflare Workers · 网页管理后台 · 账号与日志均存于 KV</div>
+    <div class="sub">Cloudflare Workers · 网页管理后台 · 账号存于 KV，日志实时展示不落盘</div>
 
     <div class="panel">
       <h2>保活设置</h2>
@@ -127,7 +127,7 @@ export const adminHtml = `<!doctype html>
     </div>
 
     <div class="panel">
-      <h2>执行日志 <button id="clearLogs" class="ghost" style="float:right;padding:4px 10px;font-size:12px">清空日志</button></h2>
+      <h2>执行日志 <button id="clearLogs" class="ghost" style="float:right;padding:4px 10px;font-size:12px">清屏</button></h2>
       <div id="logBox"></div>
     </div>
   </div>
@@ -145,7 +145,6 @@ export const adminHtml = `<!doctype html>
     return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});}
 
   var editingId=null;
-  var logTimer=null;
 
   function toast(msg){
     var t=$('#toast'); t.textContent=msg; t.classList.add('show');
@@ -220,20 +219,13 @@ export const adminHtml = `<!doctype html>
     el.textContent='上次 '+d.toLocaleString()+' 成功 '+okCount+'/'+(lr.accountCount||0);
   }
 
-  async function loadLogs(){
-    try{
-      var r=await api('/api/logs'); var d=await r.json();
-      var box=$('#logBox'); var arr=d.logs||[];
-      box.innerHTML='';
-      arr.forEach(function(e){
-        var line=document.createElement('div');
-        line.className='log-line log-'+(e.level||'info');
-        var t=new Date(e.ts).toLocaleTimeString();
-        line.textContent='['+t+'] '+e.msg;
-        box.appendChild(line);
-      });
-      box.scrollTop=box.scrollHeight;
-    }catch(e){/* 401 会跳转登录 */}
+  function appendLogLine(text){
+    var box=$('#logBox');
+    var line=document.createElement('div');
+    line.className='log-line log-info';
+    line.textContent=text;
+    box.appendChild(line);
+    box.scrollTop=box.scrollHeight;
   }
 
   async function saveAcc(){
@@ -304,17 +296,44 @@ export const adminHtml = `<!doctype html>
   async function runNow(){
     $('#runState').className='tag warn';
     $('#runState').textContent='运行中…';
-    var r=await api('/api/run',{method:'POST'});
-    var d=await r.json();
-    if(r.ok){toast('保活任务已启动，请查看日志');}
-    else{toast(d.error||'启动失败');}
+    $('#logBox').innerHTML='';
+    try{
+      var r=await api('/api/run',{method:'POST'});
+      if(!r.ok){
+        var d=await r.json().catch(function(){return {};});
+        toast(d.error||'启动失败');
+        $('#runState').className='tag err';
+        $('#runState').textContent='启动失败';
+        return;
+      }
+      // 流式读取响应，逐行实时展示（日志不写入 KV）
+      var reader=r.body.getReader();
+      var dec=new TextDecoder();
+      var buf='';
+      while(true){
+        var chunk=await reader.read();
+        if(chunk.done)break;
+        buf+=dec.decode(chunk.value,{stream:true});
+        var parts=buf.split('\n');
+        buf=parts.pop();
+        for(var i=0;i<parts.length;i++){
+          if(parts[i].length)appendLogLine(parts[i]);
+        }
+      }
+      if(buf.length)appendLogLine(buf);
+      $('#runState').className='tag ok';
+      $('#runState').textContent='运行完成';
+    }catch(e){
+      if(e.message==='unauthorized')return;
+      // 流中断也视为结束
+      $('#runState').className='tag ok';
+      $('#runState').textContent='运行结束';
+    }
   }
 
-  async function clearLogs(){
-    if(!confirm('确认清空执行日志？这只会删除 KV 中的 logs 键，不影响账号与配置。'))return;
-    var r=await api('/api/logs/clear',{method:'POST'});
-    if(r.ok){toast('日志已清空');await loadLogs();await loadKvStats();}
-    else{toast('清空失败');}
+  function clearLogs(){
+    $('#logBox').innerHTML='';
+    toast('已清屏');
   }
 
   function showLogin(msg){
@@ -333,10 +352,8 @@ export const adminHtml = `<!doctype html>
     try{
       await loadState();
       hideLogin();
-      loadLogs();
       loadKvStats();
-      if(logTimer)clearInterval(logTimer);
-      logTimer=setInterval(loadLogs,5000);
+      // 日志仅在手动「立即运行」时通过流式实时展示，无需轮询 KV
     }catch(e){showLogin('');}
   }
 

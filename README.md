@@ -4,7 +4,8 @@
 
 - 协议：REST 登录 + WebSocket(wss) 保活 + RSA-OAEP / REDQ 校验，全走标准 Workers 能力（无需原始 TCP）。
 - 管理：**自带网页后台**，可随时增删改账号、一键手动保活、实时查看执行日志。
-- 存储：账号配置与日志都存在 KV，**不进 git**；后台用 `ADMIN_TOKEN` 保护。
+- 存储：账号配置/会话/状态存 KV，**不进 git**；后台用 `ADMIN_TOKEN` 保护。
+- 日志：**只在页面实时展示，不写入 KV**（避免打满免费版 KV 写入额度）。
 
 ## 目录结构
 
@@ -14,7 +15,7 @@ src/
   framing.js   SendInfo 二进制帧 + REDQ 加密响应器
   ctyun.js     REST 登录/桌面/开机/连接 + WebSocket 保活(含重连) + 会话缓存
   config.js    账号 CRUD(存 KV) + deviceCode 解析 + 脱敏
-  log.js       执行日志采集 + KV 环形缓冲(封顶 300 条)
+  log.js       执行日志采集（纯内存，不落盘）
   web.js       暗色主题管理后台单页
   index.js     Hono 路由 + ADMIN_TOKEN 鉴权 + /api + Cron 入口
 test/          unit test (crypto + store)，node test 运行
@@ -50,24 +51,26 @@ wrangler deploy
 2. **添加账号**：填 名称 / 账号（手机号）/ 密码 / 设备码。
    - `deviceCode` 留空会自动生成并持久化；但**建议先在真实客户端用同一个设备码绑定过**，
      否则无头环境收不到短信验证码、该账号会被跳过。
-3. **立即运行一次**：点按钮触发保活，下方日志面板实时滚动（每 5s 刷新）。**只有手动运行的日志会写入 KV**。
-4. **Cron 每分钟自动跑保活**：Cron 运行的日志**只打 console**（用 `wrangler tail` 查看），不写 KV——
-   这是为了避免把免费版 KV 的每日写入额度（1000 次/天）打满。历史日志封顶 150 条。
-5. **KV 占用**：设置面板里有「KV 占用 X KB · N 键」标签，可直观看到各键大小；「执行日志」面板右上角有
-   **清空日志** 按钮，可一键删除 `logs` 键回收空间。
+3. **立即运行一次**：点按钮触发保活，下方日志面板**以响应流（SSE 式）实时滚动展示**。
+   日志**全程只在页面上展示，不写入 KV**——不会占用 KV 写入额度。
+4. **Cron 每分钟自动跑保活**：Cron 运行的日志**只打 `console.log`**（用 `wrangler tail` 查看）。
+   因为通常无人在线、且页面日志不落盘，Cron 不推送也不写 KV，把写入额度留给真正的持久化数据。
+5. **KV 占用**：设置面板里有「KV 占用 X KB · N 键」标签，可直观看到账号/会话/状态各键大小。
+   「执行日志」面板右上角有 **清屏** 按钮（仅清空当前页面显示，不影响任何 KV 数据）。
 
 > 账号密码只在 KV 与后端之间传输，网页不持久化明文；编辑账号时密码留空=保持不变。
 
 ### KV 写入量说明（重要）
 
-Cron 每分钟触发一次，若每轮都把日志写 KV，一天要写 ~2.6 万次，远超免费版 1000 次/天的写入额度，
-会直接把 KV 用量顶到 90%+。因此做了两处节流：
+KV 中**只持久化必要信息**，刻意不存日志：
 
-- **Cron 运行不写日志到 KV**（仅 `console.log`，`wrangler tail` 可见）；只有「立即运行一次」(manual) 才写 KV 日志。
-- **`lastRun` 对 Cron 节流**：每 10 分钟才写一次（手动运行必写）。
+- `config`：账号配置（账号、密码、设备码、保活时长）—— 仅在增删改账号时写入。
+- `session:<user>`：登录会话缓存——仅登录成功后写入，失效才重登（且复用校验结果不重复请求）。
+- `lastRun` / `lastRunMeta`：最近一次运行摘要——手动运行必写；**Cron 节流为每 10 分钟才写一次**。
 
-这样 Cron 的 KV 写入降到约 144 次/天（仅 `lastRun` + 偶发的登录会话），远低于免费额度。
-若仍想看 Cron 实时日志，可 `wrangler tail`；或把 Cron 改为手动触发。
+日志（每次保活的逐行输出）**完全不写 KV**，手动运行时通过 `/api/run` 的 HTTP 响应流实时推到页面。
+这样 KV 的每日写入量被压到极低（仅账号变更 + 每 10 分钟一次 `lastRun`），远离免费版 1000 次/天额度。
+若想看 Cron 实时日志，用 `wrangler tail`；或把 Cron 关掉、仅用手动触发。
 
 ## 三、更新代码后重新部署
 
@@ -99,7 +102,7 @@ node --check src/*.js             # 单文件语法校验
 | 验证码 OCR 恒定返回 `JQh8`、8 次全一样 | multipart 分隔符少了 `--` 前缀（应为 `------WebKit...` 而非 `----WebKit...`），OCR 没解析到图片；且缺 `User-Agent`/`ctg-*`/`referer` 头 | 修正分隔符 + 补齐请求头 |
 | 每个 Cron 周期都"开始登录"、反复打验证码 | `runAccount` 用 `test.code === 0` 判会话有效，但 `getDesktopList()` 返回的是**数组**（无 `.code` 字段），恒为 false → 缓存被判失效 | 改为 `test !== null` 判有效，并复用校验结果省一次请求 |
 
-验证用到的单元测试：`test/crypto.test.mjs`（MD5/SHA-256 向量、RSA-OAEP 往返、SendInfo 帧、合成 REDQ）、`test/store.test.mjs`（账号 CRUD + 环形日志）。
+验证用到的单元测试：`test/crypto.test.mjs`（MD5/SHA-256 向量、RSA-OAEP 往返、SendInfo 帧、合成 REDQ）、`test/store.test.mjs`（账号 CRUD + RunLog 采集）。
 
 ## 六、已知风险 / 注意
 

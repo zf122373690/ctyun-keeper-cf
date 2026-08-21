@@ -2,17 +2,21 @@
 // 路由：
 //   GET  /              管理后台（暗色主题单页）
 //   GET  /api/state     仪表盘数据（账号列表/设置/最近一次运行）
-//   GET  /api/logs      执行日志（仅手动运行写入 KV；Cron 只打 console）
-//   POST /api/logs/clear 清空日志（回收 KV 空间）
-//   GET  /api/kv/stats  KV 各键占用诊断
+//   GET  /api/kv/stats  KV 各键占用诊断（仅账号/会话/状态，不含日志）
 //   POST /api/accounts  新增账号
 //   PUT  /api/accounts/:id  修改账号（密码留空=不变）
 //   DELETE /api/accounts/:id 删除账号
 //   POST /api/settings  修改保活时长
-//   POST /api/run       立即触发一次保活（异步，看日志面板）
+//   POST /api/run       立即触发一次保活（流式实时推送日志到页面）
 //   GET  /health        健康检查
 // Cron（wrangler.toml [triggers]）定时触发保活。
 // 所有 /api/* 需用 Bearer ADMIN_TOKEN 鉴权（wrangler secret put ADMIN_TOKEN）。
+//
+// 设计要点：
+//   日志只打 console（wrangler tail 可见），且手动运行时通过 /api/run 的
+//   响应流实时推到网页展示，**不写入 KV**（避免打满免费版 KV 写入额度）。
+//   KV 中只持久化必要信息：账号配置(config)、登录会话(session:<user>)、
+//   设备码缓存、最近一次运行摘要(lastRun)。
 
 import { Hono } from "hono";
 import { adminHtml } from "./web.js";
@@ -31,7 +35,6 @@ import {
   getLastRun,
   setLastRun,
 } from "./config.js";
-import { RunLog, appendLogs, getLogs } from "./log.js";
 
 const app = new Hono();
 
@@ -61,21 +64,12 @@ app.get("/api/state", async (c) => {
   const kv = c.env.CTYUN_KV;
   if (!kv) return c.json({ error: "未绑定 KV 命名空间 CTYUN_KV" }, 500);
   const cfg = await loadConfig(kv);
-  const logs = await getLogs(kv, 100);
   const lastRun = await getLastRun(kv);
   return c.json({
     keepAliveSeconds: cfg.keepAliveSeconds,
     accounts: maskAccounts(cfg),
-    logCount: logs.length,
     lastRun,
   });
-});
-
-app.get("/api/logs", async (c) => {
-  const kv = c.env.CTYUN_KV;
-  if (!kv) return c.json({ error: "未绑定 KV" }, 500);
-  const logs = await getLogs(kv, 200);
-  return c.json({ logs });
 });
 
 // ---- 账号增删改 ----
@@ -132,15 +126,7 @@ app.post("/api/settings", async (c) => {
   return c.json({ ok: true, keepAliveSeconds: sec });
 });
 
-// ---- 清空日志（回收 KV 空间）----
-app.post("/api/logs/clear", async (c) => {
-  const kv = c.env.CTYUN_KV;
-  if (!kv) return c.json({ error: "未绑定 KV" }, 500);
-  await kv.delete("logs");
-  return c.json({ ok: true });
-});
-
-// ---- KV 各键占用诊断 ----
+// ---- KV 各键占用诊断（只统计账号/会话/状态，不含日志）----
 app.get("/api/kv/stats", async (c) => {
   const kv = c.env.CTYUN_KV;
   if (!kv) return c.json({ error: "未绑定 KV" }, 500);
@@ -164,27 +150,62 @@ app.get("/api/kv/stats", async (c) => {
   return c.json({ stats });
 });
 
-// ---- 立即运行（异步，结果看日志面板）----
+// ---- 立即运行（流式实时推送日志到页面，日志不写入 KV）----
 app.post("/api/run", async (c) => {
   const env = c.env;
-  c.executionCtx.waitUntil(runAll(env, "manual"));
-  return c.json({ ok: true, started: true, message: "保活任务已启动，请查看日志面板" });
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream({
+    async start(controller) {
+      let closed = false;
+      const send = (m) => {
+        if (closed) return;
+        try {
+          controller.enqueue(encoder.encode(m + "\n"));
+        } catch (_) {
+          /* 客户端断开后忽略 */
+        }
+      };
+      try {
+        await runAll(env, "manual", send);
+      } catch (e) {
+        send("ERROR: " + (e && e.message ? e.message : String(e)));
+      } finally {
+        closed = true;
+        try {
+          controller.close();
+        } catch (_) {}
+      }
+    },
+  });
+  return new Response(stream, {
+    headers: {
+      "Content-Type": "text/plain; charset=utf-8",
+      "Cache-Control": "no-cache, no-transform",
+      "X-Accel-Buffering": "no",
+    },
+  });
 });
 
 // ---- 核心：跑全部账号保活 ----
-// Cron 每分钟触发，若每轮都把日志写 KV 会迅速打满免费版 KV 写入额度(1000/天)。
-// 因此 Cron 运行只打 console 日志（wrangler tail 可见），仅「手动运行」才把日志写进 KV 供网页查看。
-// lastRun 对 Cron 节流（≥10 分钟才写一次），进一步压低写入量。
-export async function runAll(env, trigger) {
+// 日志策略（重要）：
+//   logFn 为可选回调（手动运行时由 /api/run 传入，逐行实时推到网页）。
+//   无论哪种触发，日志都只打 console（wrangler tail 可见）；
+//   若提供 logFn，则同时实时推到页面。**日志绝不写入 KV**，
+//   这样不会打满免费版 KV 的写入额度（1000 次/天）。
+//   KV 中只写必要信息：账号配置、登录会话、设备码、最近一次运行摘要(lastRun)。
+export async function runAll(env, trigger, logFn) {
   const kv = env.CTYUN_KV;
   if (!kv) return { ok: false, error: "未绑定 KV 命名空间 CTYUN_KV" };
 
-  const logger = new RunLog();
-  const log = (m) => logger.info(m);
-  const writeLogsToKv = trigger === "manual";
-  const flush = async () => {
-    const entries = logger.drain();
-    if (writeLogsToKv && entries.length) await appendLogs(kv, entries);
+  const log = (m) => {
+    console.log(m);
+    if (logFn) {
+      try {
+        logFn(m);
+      } catch (_) {
+        /* 忽略推送异常 */
+      }
+    }
   };
 
   const cfg = await loadConfig(kv);
@@ -192,7 +213,6 @@ export async function runAll(env, trigger) {
   const keepAliveSeconds = Math.max(10, cfg.keepAliveSeconds || 60);
 
   log(`开始保活（触发=${trigger}，账号数=${accounts.length}，时长=${keepAliveSeconds}s）`);
-  if (writeLogsToKv) await flush();
 
   const results = [];
   for (const acc of accounts) {
@@ -204,7 +224,6 @@ export async function runAll(env, trigger) {
     const api = new CtYunApi(deviceCode, kv, log);
     const r = await runAccount(api, acc, keepAliveSeconds, log);
     results.push(r);
-    if (writeLogsToKv) await flush();
   }
 
   const summary = {
@@ -215,9 +234,9 @@ export async function runAll(env, trigger) {
     results,
   };
   log("本轮保活结束");
-  if (writeLogsToKv) await flush();
 
-  // lastRun：手动运行必写；Cron 节流，避免每日 KV 写入超免费额度
+  // lastRun：轻量状态快照（非日志流），手动运行必写；
+  // Cron 节流（≥10 分钟才写一次），进一步压低 KV 写入量。
   let writeLastRun = true;
   if (trigger === "cron") {
     const metaRaw = await kv.get("lastRunMeta");
@@ -235,6 +254,7 @@ export async function runAll(env, trigger) {
 export default {
   fetch: (request, env, ctx) => app.fetch(request, env, ctx),
   async scheduled(event, env, ctx) {
-    ctx.waitUntil(runAll(env, "cron"));
+    // Cron 触发：日志只打 console，不推页面（通常无人在线查看），也不写 KV
+    ctx.waitUntil(runAll(env, "cron", null));
   },
 };

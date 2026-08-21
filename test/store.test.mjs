@@ -18,7 +18,7 @@ function makeKv() {
 
 const { loadConfig, addAccount, updateAccount, deleteAccount, setKeepAlive, maskAccounts, getLastRun } =
   await import("../src/config.js");
-const { RunLog, appendLogs, getLogs } = await import("../src/log.js");
+const { RunLog } = await import("../src/log.js");
 
 let passed = 0;
 function ok(name) {
@@ -109,19 +109,7 @@ let id1;
   ok("setKeepAlive 与下限钳制");
 }
 
-// ---- 环形日志：封顶 300 ----
-{
-  const kv = makeKv();
-  const big = [];
-  for (let i = 0; i < 350; i++) big.push({ ts: Date.now(), level: "info", msg: "line" + i });
-  await appendLogs(kv, big, 300);
-  const got = await getLogs(kv, 400);
-  assert.strictEqual(got.length, 300, "应裁剪到 300");
-  assert.strictEqual(got[0].msg, "line50", "保留最近的部分");
-  ok("appendLogs/getLogs 环形裁剪");
-}
-
-// ---- RunLog 采集 + drain ----
+// ---- RunLog 采集 + drain（纯内存，不落盘）----
 {
   const logger = new RunLog();
   logger.info("a");
