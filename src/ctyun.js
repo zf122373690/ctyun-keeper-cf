@@ -132,18 +132,29 @@ export class CtYunApi {
   }
 
   async login(userphone, password) {
-    for (let i = 1; i <= 3; i++) {
+    const MAX = 8;
+    for (let i = 1; i <= MAX; i++) {
+      // 每次重试前稍等，让服务端验证码轮换出新图（避免同一张图被稳定误读）
+      if (i > 1) await sleep(800 + Math.floor(Math.random() * 1200));
+
       const challenge = await this.getChallengeData();
-      if (!challenge) continue;
+      if (!challenge) {
+        this.log(`重试${i}/${MAX}, 获取challenge失败`);
+        continue;
+      }
       const challengeCode = challenge.challengeCode ?? "";
       const challengeId = challenge.challengeId ?? "";
 
       const captchaUrl =
         `${BASE_URL}/api/auth/client/captcha?height=36&width=85` +
-        `&userInfo=${encodeURIComponent(userphone)}&mode=auto&_t=${Date.now()}`;
+        `&userInfo=${encodeURIComponent(userphone)}&mode=auto` +
+        `&_t=${Date.now()}&_r=${Math.floor(Math.random() * 1e9)}`;
       const captchaImg = await this._request(captchaUrl, { asBytes: true });
       const captchaCode = await this._getCaptchaText(captchaImg);
-      if (!captchaCode) continue;
+      if (!captchaCode) {
+        this.log(`重试${i}/${MAX}, 验证码识别为空`);
+        continue;
+      }
 
       const form = {
         userAccount: userphone,
@@ -163,7 +174,7 @@ export class CtYunApi {
         await this._saveSession(userphone);
         return true;
       }
-      this.log(`重试${i}, Login Error: ${result?.msg}`);
+      this.log(`重试${i}/${MAX}, Login Error: ${result?.msg}`);
       if (result?.msg === "用户名或密码错误") return false;
     }
     return false;
