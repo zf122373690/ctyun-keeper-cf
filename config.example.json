@@ -1,0 +1,11 @@
+{
+  "keepAliveSeconds": 55,
+  "accounts": [
+    {
+      "name": "我的天翼云电脑",
+      "user": "13800138000",
+      "password": "你的密码",
+      "deviceCode": ""
+    }
+  ]
+}

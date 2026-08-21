@@ -1,0 +1,19 @@
+# Dependencies
+node_modules/
+
+# Wrangler / Cloudflare build artifacts
+dist/
+.wrangler/
+.dev.vars
+
+# Local secrets / real config (KV will hold the real config; never commit it)
+.env
+*.local.json
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS cruft
+.DS_Store
+Thumbs.db

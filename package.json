@@ -1,0 +1,12 @@
+{
+  "name": "ctyun-keeper-cf",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "天翼云电脑 Web 版纯协议保活 - Cloudflare Workers 移植版",
+  "scripts": {
+    "test": "node test/crypto.test.mjs",
+    "deploy": "wrangler deploy",
+    "dev": "wrangler dev"
+  }
+}
