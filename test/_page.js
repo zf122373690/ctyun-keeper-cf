@@ -1,155 +1,4 @@
-// web.js - 管理后台单页（暗色科技主题），由 Hono 在 GET / 返回
-// 账号密码只经 KV 与后端交互，前端不持久化明文密码。
 
-export const adminHtml = `<!doctype html>
-<html lang="zh-CN">
-<head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>天翼云电脑保活 · 管理后台</title>
-<style>
-  :root{
-    --bg:#0b1120; --panel:#1a2332; --border:#25324a; --primary:#3b82f6;
-    --primary-h:#2563eb; --text:#e2e8f0; --muted:#94a3b8;
-    --danger:#ef4444; --ok:#22c55e; --warn:#f59e0b;
-  }
-  *{box-sizing:border-box}
-  body{margin:0;background:var(--bg);color:var(--text);
-    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif;
-    font-size:14px;line-height:1.5}
-  .wrap{max-width:960px;margin:0 auto;padding:20px}
-  h1{font-size:20px;margin:0 0 4px}
-  .sub{color:var(--muted);font-size:13px;margin-bottom:18px}
-  .panel{background:var(--panel);border:1px solid var(--border);border-radius:10px;
-    padding:16px;margin-bottom:16px}
-  .panel h2{font-size:15px;margin:0 0 12px;color:#cbd5e1;font-weight:600}
-  label{display:block;color:var(--muted);font-size:12px;margin:8px 0 4px}
-  input{width:100%;background:#0f172a;border:1px solid var(--border);border-radius:8px;
-    color:var(--text);padding:9px 10px;font-size:14px;outline:none}
-  input:focus{border-color:var(--primary)}
-  .row{display:flex;gap:10px;flex-wrap:wrap}
-  .row>*{flex:1;min-width:160px}
-  button{background:var(--primary);color:#fff;border:0;border-radius:8px;
-    padding:9px 14px;font-size:14px;cursor:pointer;transition:.15s}
-  button:hover{background:var(--primary-h)}
-  button.ghost{background:transparent;border:1px solid var(--border);color:var(--text)}
-  button.ghost:hover{background:#0f172a}
-  button.danger{background:transparent;border:1px solid var(--danger);color:var(--danger)}
-  button.danger:hover{background:rgba(239,68,68,.12)}
-  .btnrow{display:flex;gap:8px;margin-top:12px;align-items:center}
-  table{width:100%;border-collapse:collapse;font-size:13px}
-  th,td{text-align:left;padding:9px 8px;border-bottom:1px solid var(--border)}
-  th{color:var(--muted);font-weight:500;font-size:12px}
-  td .acts{display:flex;gap:6px}
-  td .acts button{padding:5px 10px;font-size:12px}
-  .tag{display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;
-    background:#0f172a;border:1px solid var(--border);color:var(--muted)}
-  .tag.ok{color:var(--ok);border-color:rgba(34,197,94,.4)}
-  .tag.warn{color:var(--warn);border-color:rgba(245,158,11,.4)}
-  .tag.err{color:var(--danger);border-color:rgba(239,68,68,.4)}
-  /* 云电脑状态卡片 */
-  .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px;margin-top:4px}
-  .pc-card{background:#0f172a;border:1px solid var(--border);border-radius:10px;padding:12px;position:relative;min-height:104px}
-  .pc-card .pc-name{font-size:14px;font-weight:600;color:#e2e8f0;margin-right:64px;word-break:break-all}
-  .pc-card .pc-code{color:var(--muted);font-size:12px;margin-top:3px}
-  .pc-card .pc-acc{color:var(--muted);font-size:11px;margin-top:6px}
-  .pc-card .pc-meta{margin-top:10px;font-size:12px;color:#cbd5e1;line-height:1.8}
-  .pc-card .pc-meta b{color:var(--muted);font-weight:500;margin-right:4px}
-  .pc-badge{position:absolute;top:12px;right:12px}
-  .pc-empty{color:var(--muted)}
-  #logBox{background:#0f172a;border:1px solid var(--border);border-radius:8px;
-    height:300px;overflow:auto;padding:10px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
-    font-size:12px;white-space:pre-wrap;line-height:1.6}
-  .log-line{margin:0}
-  .log-info{color:#cbd5e1}
-  .log-warn{color:var(--warn)}
-  .log-error{color:var(--danger)}
-  /* 登录层 */
-  #login{position:fixed;inset:0;background:rgba(11,17,32,.96);display:flex;
-    align-items:center;justify-content:center;z-index:50}
-  .login-card{width:340px;background:var(--panel);border:1px solid var(--border);
-    border-radius:12px;padding:24px}
-  .login-card h2{margin:0 0 4px;font-size:18px}
-  .hint{color:var(--muted);font-size:12px;margin:6px 0 14px}
-  .err{color:var(--danger);font-size:12px;min-height:16px;margin-top:8px}
-  .toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);
-    background:var(--panel);border:1px solid var(--border);color:var(--text);
-    padding:10px 16px;border-radius:8px;font-size:13px;opacity:0;transition:.25s;pointer-events:none}
-  .toast.show{opacity:1}
-  [hidden]{display:none!important}
-</style>
-</head>
-<body>
-  <div id="login">
-    <div class="login-card">
-      <h2>管理后台登录</h2>
-      <div class="hint">请输入访问令牌（ADMIN_TOKEN）。由部署时 <code>wrangler secret put ADMIN_TOKEN</code> 设置。</div>
-      <label>访问令牌</label>
-      <input id="tokenInput" type="password" placeholder="ADMIN_TOKEN" autocomplete="off" />
-      <div class="err" id="loginErr"></div>
-      <div class="btnrow"><button id="loginBtn" style="flex:1">解锁</button></div>
-    </div>
-  </div>
-
-  <div class="wrap" id="app" hidden>
-    <h1>天翼云电脑保活</h1>
-    <div class="sub">Cloudflare Workers · 网页管理后台 · 账号存于 KV，日志实时展示不落盘</div>
-
-    <div class="panel">
-      <h2>保活设置</h2>
-      <div class="row">
-        <div>
-          <label>保活时长（秒，建议 ≤ 55）</label>
-          <input id="keepAliveSeconds" type="number" min="10" max="300" />
-        </div>
-      </div>
-      <div class="btnrow">
-        <button id="saveSettings">保存设置</button>
-        <button id="runBtn" class="ghost">立即运行一次</button>
-        <span id="kvStat" class="tag" style="margin-left:8px"></span>
-        <span id="runState" class="tag" style="margin-left:auto"></span>
-      </div>
-    </div>
-
-    <div class="panel">
-      <h2>云电脑状态 <span id="pcSummary" class="tag" style="margin-left:8px"></span></h2>
-      <div id="pcBody"><div style="color:var(--muted)">暂无数据，运行一次后显示。</div></div>
-    </div>
-
-    <div class="panel">
-      <h2>账号列表</h2>
-      <table>
-        <thead><tr><th>名称</th><th>账号</th><th>密码</th><th>设备码</th><th>操作</th></tr></thead>
-        <tbody id="accBody"></tbody>
-      </table>
-    </div>
-
-    <div class="panel">
-      <h2 id="formTitle">添加账号</h2>
-      <div class="row">
-        <div><label>名称（备注）</label><input id="f_name" placeholder="例如：店铺A" /></div>
-        <div><label>账号（手机号/用户名）</label><input id="f_user" placeholder="user" /></div>
-      </div>
-      <div class="row">
-        <div><label>密码</label><input id="f_password" type="password" placeholder="密码（编辑时留空=不变）" autocomplete="off" /></div>
-        <div><label>设备码 deviceCode</label><input id="f_device" placeholder="留空则自动生成" /></div>
-      </div>
-      <div class="btnrow">
-        <button id="saveAcc">保存账号</button>
-        <button id="cancelEdit" class="ghost" hidden>取消编辑</button>
-        <span id="accMsg" style="color:var(--muted);font-size:12px"></span>
-      </div>
-    </div>
-
-    <div class="panel">
-      <h2>执行日志 <button id="clearLogs" class="ghost" style="float:right;padding:4px 10px;font-size:12px">清屏</button></h2>
-      <div id="logBox"></div>
-    </div>
-  </div>
-
-  <div class="toast" id="toast"></div>
-
-<script>
 (function(){
   var TOKEN_KEY='ctyun_admin_token';
   function getToken(){return localStorage.getItem(TOKEN_KEY)||'';}
@@ -415,8 +264,9 @@ export const adminHtml = `<!doctype html>
         var chunk=await reader.read();
         if(chunk.done)break;
         buf+=dec.decode(chunk.value,{stream:true});
-        // 按行切分日志流；用 char(10) 避免模板字符串把换行转义吞掉
-        var parts=buf.split(String.fromCharCode(10));
+        // 注意：此处必须写 '\n'（外层是模板字符串，单个 
+ 会被转成真实换行符，导致页面脚本语法错误）
+        var parts=buf.split('\n');
         buf=parts.pop();
         for(var i=0;i<parts.length;i++){
           if(parts[i].length)appendLogLine(parts[i]);
@@ -480,6 +330,3 @@ export const adminHtml = `<!doctype html>
 
   boot();
 })();
-</script>
-</body>
-</html>`;
