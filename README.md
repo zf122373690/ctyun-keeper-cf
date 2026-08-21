@@ -12,46 +12,99 @@
 src/
   crypto.js    WebCrypto SHA-256 + 纯 JS MD5 + RSA-OAEP(SHA-1) 空消息加密
   framing.js   SendInfo 二进制帧 + REDQ 加密响应器
-  ctyun.js     REST 登录/桌面/开机/连接 + WebSocket 保活(含重连)
+  ctyun.js     REST 登录/桌面/开机/连接 + WebSocket 保活(含重连) + 会话缓存
   config.js    账号 CRUD(存 KV) + deviceCode 解析 + 脱敏
-  log.js       执行日志采集 + KV 环形缓冲
+  log.js       执行日志采集 + KV 环形缓冲(封顶 300 条)
   web.js       暗色主题管理后台单页
-  index.js     Hono 路由 + 鉴权 + API + Cron 入口
-test/          单元测试(crypto + store)，node test 运行
+  index.js     Hono 路由 + ADMIN_TOKEN 鉴权 + /api + Cron 入口
+test/          unit test (crypto + store)，node test 运行
+wrangler.toml  KV 绑定(CTYUN_KV) + Cron(*/1 * * * *) 已预填
+config.example.json  KV 里 config 键的样例
 ```
 
-## 部署
+## 一、部署（首次）
+
+> 前置：本机已装 Node，且 `wrangler login` 过（有 Cloudflare 账号权限）。
 
 ```bash
-npm install                       # 安装 hono 等依赖
-wrangler login
-# 1) KV 命名空间（已创建则跳过，把 id 填进 wrangler.toml 的 CTYUN_KV）
-wrangler kv namespace create CTYUN_KV
-# 2) 后台访问令牌（必填，任意长随机串，不是云电脑账号密码）
+cd ctyun-keeper-cf
+npm install                       # 安装依赖（hono 等）
+
+# 1) KV 命名空间：已创建过，id 已写进 wrangler.toml 的 CTYUN_KV，可跳过。
+#    若需新建：wrangler kv namespace create CTYUN_KV，再把返回的 id 填进 wrangler.toml
+wrangler kv namespace create CTYUN_KV   # 可选，重复创建无害
+
+# 2) 后台访问令牌（必填！任意长随机串，不是云电脑账号密码）
 wrangler secret put ADMIN_TOKEN
+#   不会编随机串？用：openssl rand -base64 24
+
 # 3) 部署
 wrangler deploy
 ```
 
-## 使用网页后台
+部署成功后控制台/输出会给出地址：`https://ctyun-keeper-cf.<你的子域>.workers.dev/`
 
-1. 打开 `https://<你的子域>.workers.dev/`，输入刚设置的 `ADMIN_TOKEN` 解锁。
-2. **添加账号**：填名称/账号/密码；设备码 `deviceCode` 留空会自动生成并持久化。
+## 二、在网页后台添加账号
+
+1. 浏览器打开上面的地址，输入 `ADMIN_TOKEN` 解锁（暗色登录卡片）。
+2. **添加账号**：填 名称 / 账号（手机号）/ 密码 / 设备码。
+   - `deviceCode` 留空会自动生成并持久化；但**建议先在真实客户端用同一个设备码绑定过**，
+     否则无头环境收不到短信验证码、该账号会被跳过。
 3. **立即运行一次**：点按钮触发保活，下方日志面板实时滚动（每 2.5s 刷新）。
-4. **看历史日志/最近一次结果**：日志存 KV（封顶 300 条），随时刷新可见；Cron 定时也会持续写入。
+4. 之后 **Cron 每分钟自动跑**，日志持续写 KV，随时刷新可见；历史日志封顶 300 条。
 
-> 账号密码只在 KV 与后端之间传输，网页不持久化明文；编辑账号时密码留空表示保持不变。
+> 账号密码只在 KV 与后端之间传输，网页不持久化明文；编辑账号时密码留空=保持不变。
 
-## 本地开发
+## 三、更新代码后重新部署
+
+仓库在 GitHub 上已是公开（或私有），每次改完代码都要 **先拉最新、再部署**，否则 CF 上跑的是旧版：
+
+```bash
+git pull            # 拉取最新（含本仓库的历次修复）
+wrangler deploy     # 重新部署
+```
+
+> 关键坑：本地目录和仓库不同步时，从旧目录 `wrangler deploy` 会把旧代码推上去，
+> 表现为"明明修过却还是报错"。务必 `git pull` 后再 `deploy`。
+
+## 四、本地开发 / 测试
 
 ```bash
 wrangler dev                      # 本地起服务，访问 http://localhost:8787/
-node test                         # 跑单元测试
+node test                         # 跑单元测试（crypto + store，全部通过）
+node --check src/*.js             # 单文件语法校验
 ```
 
-## 已知风险 / 注意
+## 五、排错记录（搭建过程中已修复的坑）
+
+下面这些 bug 都已修复并推送到仓库，列出来方便排查同类问题：
+
+| 现象 | 根因 | 修复 |
+| --- | --- | --- |
+| `ReferenceError: bytesToBase64 is not defined` | `ctyun.js` import 漏了 `bytesToBase64`（验证码图片转 base64 用到） | 补进 import |
+| 验证码 OCR 恒定返回 `JQh8`、8 次全一样 | multipart 分隔符少了 `--` 前缀（应为 `------WebKit...` 而非 `----WebKit...`），OCR 没解析到图片；且缺 `User-Agent`/`ctg-*`/`referer` 头 | 修正分隔符 + 补齐请求头 |
+| 每个 Cron 周期都"开始登录"、反复打验证码 | `runAccount` 用 `test.code === 0` 判会话有效，但 `getDesktopList()` 返回的是**数组**（无 `.code` 字段），恒为 false → 缓存被判失效 | 改为 `test !== null` 判有效，并复用校验结果省一次请求 |
+
+验证用到的单元测试：`test/crypto.test.mjs`（MD5/SHA-256 向量、RSA-OAEP 往返、SendInfo 帧、合成 REDQ）、`test/store.test.mjs`（账号 CRUD + 环形日志）。
+
+## 六、已知风险 / 注意
 
 - **deviceCode 必须先绑定**：无头环境无法输入短信验证码，未绑定设备的账号会被跳过。先在真实客户端用同一个 `deviceCode` 绑定过再上云。
-- **登录依赖第三方打码服务**（`orc.1999111.xyz`）：若不可用则登录失败；代码已加 KV 会话缓存，登录成功后复用、失效才重登。
-- **Cron 频率**：默认每分钟一次；高频 Cron + 较长保活窗口可能需要 Workers 付费版。在「保活设置」里调整时长（建议 ≤ 55s）。
-- ecloud / soho 两个版本依赖原始 TCP，标准 Workers 跑不了，需 Workers+Sockets 或 Containers，暂未移植。
+- **登录依赖第三方打码服务**（`orc.1999111.xyz`）：若不可用则登录失败。代码已加 KV 会话缓存——登录成功后复用会话、仅在失效时重登，把不稳定的打码环节降到最低。
+- **Cron 频率**：默认每分钟一次（`*/1 * * * *`）。高频 Cron + 较长保活窗口在标准版够用（单账号保活窗口建议 ≤ 55s，与 Cron 间隔匹配）；多账号或超长窗口可能触达 CPU/时长限制，按需升级 Workers 付费版。
+- **WebSocket 不能带自定义请求头**：Workers 的 `WebSocket` 客户端无法设置 `Origin`/`ctg-*` 头（REST 部分可以，WS 不行）。实测 ctyun WS 服务端容忍缺 Origin，但不同账号/服务端可能行为不同。
+
+## 七、关于另外两个版本（ecloud / soho）
+
+`ctyun_keepalive.py`（天翼）是三者里唯一纯 WebSocket 方案，已完整移植。
+`ecloud_enterprise.py`、`soho_keepalive.py` 保活核心是**裸 TCP**（ZTEC 握手 + SPICE 网关 / H3C gRPC），
+标准/免费版 Workers 没有 TCP 能力。要上 Cloudflare 有两条路（待定）：
+
+- **Workers 付费版 + Sockets API（$5/月）**：可补齐 TCP，但 H3C 的 gRPC-over-HTTP/2 实现复杂；
+- **Cloudflare Containers**：完整容器+网络，甚至能直接跑原来的 Python。
+
+## 八、仓库状态
+
+- 公开仓库：https://github.com/zf122373690/ctyun-keeper-cf
+- 真实账号/密码只存 Cloudflare KV（`config` 键），**不进 git**；仓库内 `config.example.json` 仅为占位符。
+- `ADMIN_TOKEN` 是后台访问令牌（经 `wrangler secret` 注入），不出现在代码里。
