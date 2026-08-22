@@ -241,9 +241,10 @@ export async function runAll(env, trigger, logFn) {
   if (!kv) return { ok: false, error: "未绑定 KV 命名空间 CTYUN_KV" };
 
   const pad = (n) => String(n).padStart(2, "0");
+  // 显式计算北京时间（UTC+8），不依赖 Worker 运行时时区（CF 默认 UTC）
   const stamp = () => {
-    const d = new Date();
-    return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+    const d = new Date(Date.now() + 8 * 3600 * 1000);
+    return `${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())}`;
   };
   const log = (m) => {
     const line = `[${stamp()}] ${m}`;

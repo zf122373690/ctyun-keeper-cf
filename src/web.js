@@ -274,9 +274,10 @@ export const adminHtml = `<!doctype html>
 
   function fmtTime(ts){
     if(!ts)return '—';
-    var d=new Date(ts);
+    // 显式北京时间（UTC+8），避免浏览器/服务端时区差异
+    var d=new Date(ts+8*3600*1000);
     function p(n){return (n<10?'0':'')+n;}
-    return (d.getMonth()+1)+'-'+p(d.getDate())+' '+p(d.getHours())+':'+p(d.getMinutes())+':'+p(d.getSeconds());
+    return (d.getUTCMonth()+1)+'-'+p(d.getUTCDate())+' '+p(d.getUTCHours())+':'+p(d.getUTCMinutes())+':'+p(d.getUTCSeconds());
   }
 
   function fmtDuration(ms){
