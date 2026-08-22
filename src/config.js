@@ -128,40 +128,6 @@ export function maskAccounts(cfg) {
   }));
 }
 
-export async function getLastRun(kv) {
-  try {
-    const raw = await kv.get("lastRun");
-    return raw ? JSON.parse(raw) : null;
-  } catch {
-    return null;
-  }
-}
-
-export async function setLastRun(kv, data) {
-  if (!kv) return;
-  // 将 lastRunMeta 合并进同一键，少一次 put（免费版每天仅 1000 次写入）
-  await kv.put("lastRun", JSON.stringify({ ...data, _meta: { ts: Date.now() } }));
-}
-
-// ---- 云电脑状态（按账号快照，允许写入 KV；与 lastRun 共用 Cron 节流）----
-export async function getAccountStatus(kv, user) {
-  try {
-    const raw = await kv.get("status:" + user);
-    return raw ? JSON.parse(raw) : null;
-  } catch {
-    return null;
-  }
-}
-
-// 仅在内容变化时才写入，避免每轮重复写相同快照（省 KV 写入额度）
-export async function setAccountStatus(kv, user, data) {
-  if (!kv) return;
-  const next = JSON.stringify(data);
-  try {
-    const prev = await kv.get("status:" + user);
-    if (prev === next) return; // 未变化，跳过写入
-  } catch {
-    /* 读失败则直接写 */
-  }
-  await kv.put("status:" + user, next);
-}
+// 注意：原 lastRun / status:<user> 两个 KV 键已彻底移除（纯展示数据，非功能必需）。
+// 云电脑状态改为「页面打开时实时查询」(/api/snapshot)，不写入 KV，
+// 仅依赖 session:<user> 里的 loginTs 推算在线时长。详见 index.js。

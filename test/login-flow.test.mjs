@@ -1,11 +1,12 @@
 // 本地登录流程回归测试：mock KV + 真实 Hono app
-// 验证：1) 无 token 401；2) 正确 token 200；3) 旧格式 status 数据不炸；4) 页面 HTML 完整
+// 验证：1) 无 token 401；2) 正确 token 200；3) /api/state 不再含 status/lastRun；
+//       4) /api/snapshot 接口可用且不崩溃；5) 页面 HTML 完整
 import http from "node:http";
 import worker from "../src/index.js";
 
 const TOKEN = "test-admin-token-123";
 
-// ---- mock KV（模拟线上数据，含旧格式 status:<user>）----
+// ---- mock KV（仅保留必要键：config / session；不含任何 status/lastRun 键）----
 function mockKV() {
   const store = new Map();
   store.set(
@@ -17,23 +18,8 @@ function mockKV() {
       ],
     })
   );
-  store.set("session:13800138000", JSON.stringify({ userId: 1, tenantId: "t", secretKey: "k", bondedDevice: true }));
-  // 旧格式：没有 onlineSince / keepAliveStart 字段（老版本写入的数据）
-  store.set(
-    "status:13800138000",
-    JSON.stringify({
-      ts: Date.now() - 3600000,
-      user: "13800138000",
-      ok: true,
-      error: "",
-      desktops: [
-        { desktopId: "d1", desktopCode: "PC-001", name: "云电脑1", status: "运行中", online: true, keptAlive: true },
-        { desktopId: "d2", desktopCode: "PC-002", name: "云电脑2", status: "已停止", online: false, keptAlive: false },
-      ],
-    })
-  );
-  store.set("lastRun", JSON.stringify({ trigger: "cron", ts: Date.now(), results: [] }));
-  store.set("lastRunMeta", JSON.stringify({ ts: Date.now() }));
+  // session 有效（bondedDevice=true），但 getDesktopList 会因无真实后端而失败
+  store.set("session:13800138000", JSON.stringify({ userId: 1, tenantId: "t", secretKey: "k", bondedDevice: true, loginTs: Date.now() }));
   return {
     async get(k) { return store.has(k) ? store.get(k) : null; },
     async put(k, v) { store.set(k, String(v)); },
@@ -76,6 +62,7 @@ server.listen(18787, async () => {
   check("页面含登录卡片", html.includes("管理后台登录"));
   check("页面含云电脑状态面板", html.includes("云电脑状态"));
   check("页面含 pcBody 容器", html.includes('id="pcBody"'));
+  check("页面含刷新状态按钮", html.includes("刷新状态"));
 
   // 2. 无 token → 401
   r = await fetch(base + "/api/state");
@@ -87,17 +74,20 @@ server.listen(18787, async () => {
   j = await r.json().catch(() => ({}));
   check("错误 token 返回 401 且提示「未授权」", r.status === 401 && /未授权/.test(j.error || ""), j.error || "");
 
-  // 4. 正确 token → 200（含旧格式 status 数据）
+  // 4. 正确 token → 200（/api/state 不再含 status/lastRun/pcSummary）
   r = await fetch(base + "/api/state", { headers: { Authorization: "Bearer " + TOKEN } });
   j = await r.json().catch(() => ({}));
   check("正确 token 返回 200", r.status === 200);
   check("返回 accounts 数组", Array.isArray(j.accounts) && j.accounts.length === 1);
-  check("账号带 status.desktops", j.accounts?.[0]?.status?.desktops?.length === 2);
-  check("pcSummary 统计正确(共2在线1)", j.pcSummary?.total === 2 && j.pcSummary?.online === 1, JSON.stringify(j.pcSummary));
+  check("/api/state 不再返回 status 字段", j.accounts?.[0]?.status === undefined);
+  check("/api/state 不再返回 lastRun/pcSummary", j.lastRun === undefined && j.pcSummary === undefined);
 
-  // 5. 旧格式缺 onlineSince 时兼容（不 500）
-  const d0 = j.accounts?.[0]?.status?.desktops?.[0] || {};
-  check("旧格式桌面 onlineSince 为空不报错", d0.onlineSince === null || d0.onlineSince === undefined);
+  // 5. /api/snapshot 接口可用且不崩溃（无真实桌面列表时返回合理结构）
+  r = await fetch(base + "/api/snapshot", { headers: { Authorization: "Bearer " + TOKEN } });
+  let s = await r.json().catch(() => ({}));
+  check("/api/snapshot 返回 200", r.status === 200);
+  check("/api/snapshot 含 accounts 数组", Array.isArray(s.accounts) && s.accounts.length === 1);
+  check("/api/snapshot 含 pcSummary", s.pcSummary && typeof s.pcSummary.total === "number");
 
   // 6. KV stats
   r = await fetch(base + "/api/kv/stats", { headers: { Authorization: "Bearer " + TOKEN } });

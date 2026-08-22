@@ -269,18 +269,20 @@ export class CtYunApi {
   }
 
   // ---- 会话缓存（减少验证码 OCR 压力）----
-  // 仅在内容变化时才写入，且 10 分钟内不重复写，避免重登录风暴打满 KV 免费额度
+  // 仅在内容变化时才写入（内容 diff），避免重复写打满 KV 免费额度。
+  // loginTs 记录本次登录时刻，用于页面推算「已在线多久 / 保活始于」（替代原 KV status 快照）
   async _saveSession(user) {
     if (!this.kv || !this.loginInfo) return;
+    const payload = { ...this.loginInfo, loginTs: Date.now() };
     try {
-      const next = JSON.stringify(this.loginInfo);
+      const next = JSON.stringify(payload);
       const prev = await this.kv.get("session:" + user);
       if (prev === next) return; // 未变化，跳过
     } catch {
       /* 读失败则继续写 */
     }
     try {
-      await this.kv.put("session:" + user, JSON.stringify(this.loginInfo));
+      await this.kv.put("session:" + user, JSON.stringify(payload));
     } catch (e) {
       this.log(`保存会话失败: ${e}`);
     }
@@ -416,7 +418,7 @@ function keepaliveWorker(api, account, desktop, keepAliveSeconds, desktopInfo, l
 }
 
 // ---- 单账号完整流程 ----
-export async function runAccount(api, account, keepAliveSeconds, log, prevStatus) {
+export async function runAccount(api, account, keepAliveSeconds, log) {
   const result = { user: account.user, ok: false, desktops: [], error: "" };
 
   // 尝试复用缓存会话
@@ -460,19 +462,14 @@ export async function runAccount(api, account, keepAliveSeconds, log, prevStatus
   }
 
   // 构建云电脑状态快照（用于页面展示：台数 / 状态 / 是否在线 / 保活起始 / 已在线时长）
+  // 注意：不再写入 KV。onlineSince / keepAliveStart 统一以本次登录时刻(loginTs)计，
+  // 跨轮累计改由 session:<user> 缓存的 loginTs 提供（见 sessionFor）
   const statusMap = new Map();
-  const prevDesktops =
-    prevStatus && Array.isArray(prevStatus.desktops) ? prevStatus.desktops : [];
-  const prevById = new Map(prevDesktops.map((d) => [d.desktopId, d]));
+  const loginTs = (api.loginInfo && api.loginInfo.loginTs) || Date.now();
   const runStart = Date.now();
   for (const d of desktopList) {
-    const prev = prevById.get(d.desktopId);
     const online = d.useStatusText === "运行中";
-    // 在线起始时刻：若之前就在线上则沿用旧值（跨运行累计），否则以本次运行起点记
-    let onlineSince = null;
-    if (online) {
-      onlineSince = prev && prev.online && prev.onlineSince ? prev.onlineSince : runStart;
-    }
+    const onlineSince = online ? loginTs : null;
     statusMap.set(d.desktopId, {
       desktopId: d.desktopId,
       desktopCode: d.desktopCode || "",
@@ -481,7 +478,7 @@ export async function runAccount(api, account, keepAliveSeconds, log, prevStatus
       online,
       keptAlive: false,
       onlineSince,
-      keepAliveStart: prev ? prev.keepAliveStart || null : null,
+      keepAliveStart: loginTs,
     });
   }
 
@@ -535,4 +532,59 @@ export async function runAccount(api, account, keepAliveSeconds, log, prevStatus
   }
   result.desktops = Array.from(statusMap.values());
   return result;
+}
+
+// ---- 只读状态查询（页面 /api/snapshot 用）----
+// 仅复用缓存会话拉桌面列表，构造状态卡片，**不做开机/连接/WebSocket 保活**，
+// 也不写入任何 KV。用于页面实时展示「几台 / 是否在线 / 已在线多久」，
+// 彻底替代原 KV 的 status:<user> 快照。会话失效且无密码时返回错误提示。
+export async function queryStatus(api, account, log) {
+  const cached = await api.loadSession(account.user);
+  if (!cached) {
+    if (!account.password) {
+      return {
+        user: account.user,
+        ok: false,
+        error: "无缓存会话且无密码，无法查询",
+        desktops: [],
+      };
+    }
+    // 需要登录（会触发 OCR，但不写 KV、不做保活）
+    const ok = await api.login(account.user, account.password);
+    if (!ok) {
+      return { user: account.user, ok: false, error: "登录失败", desktops: [] };
+    }
+  } else {
+    api.loginInfo = cached;
+  }
+
+  if (api.loginInfo && !api.loginInfo.bondedDevice) {
+    return {
+      user: account.user,
+      ok: false,
+      error: "设备未绑定，请先在真实客户端绑定 deviceCode",
+      desktops: [],
+    };
+  }
+
+  const list = await api.getDesktopList();
+  if (!list || list.length === 0) {
+    return { user: account.user, ok: false, error: "未获取到云电脑", desktops: [] };
+  }
+
+  const loginTs = (api.loginInfo && api.loginInfo.loginTs) || Date.now();
+  const desktops = list.map((d) => {
+    const online = d.useStatusText === "运行中";
+    return {
+      desktopId: d.desktopId,
+      desktopCode: d.desktopCode || "",
+      name: d.desktopName || d.computerName || d.desktopCode || "(未命名)",
+      status: d.useStatusText || "未知",
+      online,
+      keptAlive: false, // 实时查询不保活，故恒为 false
+      onlineSince: online ? loginTs : null,
+      keepAliveStart: loginTs,
+    };
+  });
+  return { user: account.user, ok: true, error: "", desktops };
 }

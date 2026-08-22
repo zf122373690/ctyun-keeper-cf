@@ -108,13 +108,14 @@ export const adminHtml = `<!doctype html>
       <div class="btnrow">
         <button id="saveSettings">保存设置</button>
         <button id="runBtn" class="ghost">立即运行一次</button>
+        <button id="refreshBtn" class="ghost">刷新状态</button>
         <span id="kvStat" class="tag" style="margin-left:8px"></span>
         <span id="runState" class="tag" style="margin-left:auto"></span>
       </div>
       <div class="runstat">
         <span class="runstat-item">自动保活：<b id="cronInfo">—</b></span>
-        <span class="runstat-item">上次运行：<b id="lastRunTime">—</b></span>
-        <span class="runstat-item">触发：<b id="lastRunTrigger">—</b></span>
+        <span class="runstat-item">状态更新于：<b id="lastRunTime">—</b></span>
+        <span class="runstat-item">来源：<b id="lastRunTrigger">—</b></span>
         <span class="runstat-item">下次运行约：<b id="nextRun">—</b></span>
         <span class="runstat-item">心跳：<b id="heartbeat">—</b></span>
       </div>
@@ -122,7 +123,7 @@ export const adminHtml = `<!doctype html>
 
     <div class="panel">
       <h2>云电脑状态 <span id="pcSummary" class="tag" style="margin-left:8px"></span></h2>
-      <div id="pcBody"><div style="color:var(--muted)">暂无数据，运行一次后显示。</div></div>
+      <div id="pcBody"><div style="color:var(--muted)">加载中…</div></div>
     </div>
 
     <div class="panel">
@@ -172,7 +173,7 @@ export const adminHtml = `<!doctype html>
   var tickStarted=false;
   var cronExpr='*/1 * * * *';
   var serverTime=Date.now();
-  var lastRunTs=0;
+  var snapshotTs=0;
 
   function toast(msg){
     var t=$('#toast'); t.textContent=msg; t.classList.add('show');
@@ -200,12 +201,22 @@ export const adminHtml = `<!doctype html>
     cronExpr=d.cronExpr||'*/1 * * * *';
     serverTime=d.serverTime||Date.now();
     renderAccounts(d.accounts||[]);
-    renderLastRun(d.lastRun);
-    renderPc(d.accounts||[]);
-    renderPcSummary(d.pcSummary);
     var _mf=cronExpr.trim().split(' ').filter(Boolean)[0]||'*';
     var _step=_mf.indexOf('/')>=0?parseInt(_mf.split('/')[1],10)||1:1;
     $('#cronInfo').textContent='每 '+_step+' 分钟（'+cronExpr+'）';
+    await loadSnapshot();
+  }
+
+  // 实时状态快照（GET /api/snapshot，后端不写 KV，仅复用缓存会话拉桌面列表）
+  async function loadSnapshot(){
+    var r=await api('/api/snapshot');
+    var d=await r.json();
+    if(!d||!d.accounts)return;
+    renderPc(d.accounts||[]);
+    renderPcSummary(d.pcSummary);
+    snapshotTs=d.ts||Date.now();
+    $('#lastRunTime').textContent=fmtTime(snapshotTs);
+    $('#lastRunTrigger').textContent='实时查询';
   }
 
   function renderPcSummary(s){
@@ -219,21 +230,19 @@ export const adminHtml = `<!doctype html>
     var wrap=$('#pcBody');
     var cards=[];
     (accounts||[]).forEach(function(a){
-      var st=a.status;
-      if(!st)return;
-      var ds=st.desktops||[];
+      var ds=a.desktops||[];
       if(ds.length===0){
-        if(st.error){
-          cards.push(cardHtml(a.name||a.user,'—','—',st.error,false,false,null,null,true));
+        if(a.error){
+          cards.push(cardHtml(a.user||'(未知)','—','—',a.error,false,false,null,null,true));
         }
         return;
       }
       ds.forEach(function(d){
-        cards.push(cardHtml(a.name||a.user,d.name,d.desktopCode,d.status,!!d.online,!!d.keptAlive,d.onlineSince||null,d.keepAliveStart||null,false));
+        cards.push(cardHtml(a.user||d.name,d.name,d.desktopCode,d.status,!!d.online,!!d.keptAlive,d.onlineSince||null,d.keepAliveStart||null,false));
       });
     });
     if(!cards.length){
-      wrap.innerHTML='<div class="pc-empty">暂无云电脑状态数据，运行一次后显示。</div>';
+      wrap.innerHTML='<div class="pc-empty">暂无云电脑状态数据，点击「刷新状态」或稍候自动加载。</div>';
       return;
     }
     wrap.innerHTML='<div class="cards">'+cards.join('')+'</div>';
@@ -312,13 +321,7 @@ export const adminHtml = `<!doctype html>
       el.textContent='('+cronExpr+')';
     }
     // 心跳随时间漂移，需周期性刷新文字
-    var hb=document.getElementById('heartbeat');
-    if(hb && lastRunTs){
-      var gapMin=Math.floor((now-lastRunTs)/60000);
-      if(gapMin<=2){hb.textContent='正常（'+gapMin+'分钟前）';hb.style.color='var(--ok)';}
-      else if(gapMin<=10){hb.textContent='偏久（'+gapMin+'分钟前）';hb.style.color='var(--warn)';}
-      else{hb.textContent='异常·可能停摆（'+gapMin+'分钟前）';hb.style.color='var(--danger)';}
-    }
+    renderHeartbeat();
   }
 
   async function loadKvStats(){
@@ -358,26 +361,17 @@ export const adminHtml = `<!doctype html>
     });
   }
 
-  function renderLastRun(lr){
-    var el=$('#runState');
-    if(!lr){
-      el.className='tag';el.textContent='尚未运行';
-      $('#lastRunTime').textContent='—';
-      $('#lastRunTrigger').textContent='—';
-      $('#heartbeat').textContent='未见运行';
-      $('#heartbeat').style.color='var(--muted)';
+  // 心跳：基于最近一次快照查询时间（snapshotTs）估算，
+  // 不再依赖 KV 里的 lastRun（已移除）。超过 10 分钟未刷新视为异常。
+  function renderHeartbeat(){
+    var hb=$('#heartbeat');
+    if(!hb)return;
+    if(!snapshotTs){
+      hb.textContent='未见状态';
+      hb.style.color='var(--muted)';
       return;
     }
-    var d=new Date(lr.ts);
-    var okCount=(lr.results||[]).filter(function(r){return r.ok;}).length;
-    el.className='tag '+((lr.results||[]).some(function(r){return !r.ok;})?'warn':'ok');
-    el.textContent='上次 '+fmtTime(lr.ts)+' 成功 '+okCount+'/'+(lr.accountCount||0);
-    lastRunTs=lr.ts||0;
-    $('#lastRunTime').textContent=fmtTime(lr.ts);
-    $('#lastRunTrigger').textContent=(lr.trigger==='cron'?'定时(Cron)':'手动');
-    // 心跳：距上次运行超过 2 分钟视为异常（说明 Cron 可能未触发）
-    var gapMin=Math.floor((Date.now()-lr.ts)/60000);
-    var hb=$('#heartbeat');
+    var gapMin=Math.floor((Date.now()-snapshotTs)/60000);
     if(gapMin<=2){hb.textContent='正常（'+gapMin+'分钟前）';hb.style.color='var(--ok)';}
     else if(gapMin<=10){hb.textContent='偏久（'+gapMin+'分钟前）';hb.style.color='var(--warn)';}
     else{hb.textContent='异常·可能停摆（'+gapMin+'分钟前）';hb.style.color='var(--danger)';}
@@ -486,13 +480,13 @@ export const adminHtml = `<!doctype html>
         }
       }
       if(buf.length)appendLogLine(buf);
-      try{await loadState();}catch(_){}
+      try{await loadSnapshot();}catch(_){}
       $('#runState').className='tag ok';
       $('#runState').textContent='运行完成';
     }catch(e){
       if(e.message==='unauthorized')return;
       // 流中断也视为结束
-      try{await loadState();}catch(_){}
+      try{await loadSnapshot();}catch(_){}
       $('#runState').className='tag ok';
       $('#runState').textContent='运行结束';
     }
@@ -520,8 +514,8 @@ export const adminHtml = `<!doctype html>
       await loadState();
       hideLogin();
       loadKvStats();
-      // 云电脑状态每 30 秒自动刷新（仅 GET /api/state，KV 只读不写，免费）
-      setInterval(function(){loadState().catch(function(){});},30000);
+      // 云电脑状态每 30 秒自动刷新（仅 GET /api/snapshot，后端不写 KV，免费）
+      setInterval(function(){loadSnapshot().catch(function(){});},30000);
       // 「已在线」时长每秒刷新一次（仅前端计算，不请求后端）
       if(!tickStarted){tickStarted=true;setInterval(function(){tickDurations();tickNextRun();},1000);}
       tickNextRun();
@@ -540,6 +534,7 @@ export const adminHtml = `<!doctype html>
   $('#cancelEdit').onclick=resetForm;
   $('#saveSettings').onclick=saveSettings;
   $('#runBtn').onclick=runNow;
+  $('#refreshBtn').onclick=function(){loadSnapshot().catch(function(){});toast('状态已刷新');};
   $('#clearLogs').onclick=clearLogs;
 
   boot();
