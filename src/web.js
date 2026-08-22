@@ -37,6 +37,8 @@ export const adminHtml = `<!doctype html>
   button.danger{background:transparent;border:1px solid var(--danger);color:var(--danger)}
   button.danger:hover{background:rgba(239,68,68,.12)}
   .btnrow{display:flex;gap:8px;margin-top:12px;align-items:center}
+  .runstat{display:flex;flex-wrap:wrap;gap:6px 18px;margin-top:10px;padding-top:10px;border-top:1px solid var(--border);font-size:12px;color:var(--muted)}
+  .runstat-item b{color:var(--text);font-weight:600}
   table{width:100%;border-collapse:collapse;font-size:13px}
   th,td{text-align:left;padding:9px 8px;border-bottom:1px solid var(--border)}
   th{color:var(--muted);font-weight:500;font-size:12px}
@@ -109,6 +111,13 @@ export const adminHtml = `<!doctype html>
         <span id="kvStat" class="tag" style="margin-left:8px"></span>
         <span id="runState" class="tag" style="margin-left:auto"></span>
       </div>
+      <div class="runstat">
+        <span class="runstat-item">自动保活：<b id="cronInfo">—</b></span>
+        <span class="runstat-item">上次运行：<b id="lastRunTime">—</b></span>
+        <span class="runstat-item">触发：<b id="lastRunTrigger">—</b></span>
+        <span class="runstat-item">下次运行约：<b id="nextRun">—</b></span>
+        <span class="runstat-item">心跳：<b id="heartbeat">—</b></span>
+      </div>
     </div>
 
     <div class="panel">
@@ -161,6 +170,9 @@ export const adminHtml = `<!doctype html>
 
   var editingId=null;
   var tickStarted=false;
+  var cronExpr='*/1 * * * *';
+  var serverTime=Date.now();
+  var lastRunTs=0;
 
   function toast(msg){
     var t=$('#toast'); t.textContent=msg; t.classList.add('show');
@@ -185,10 +197,15 @@ export const adminHtml = `<!doctype html>
     var r=await api('/api/state');
     var d=await r.json();
     $('#keepAliveSeconds').value=d.keepAliveSeconds||55;
+    cronExpr=d.cronExpr||'*/1 * * * *';
+    serverTime=d.serverTime||Date.now();
     renderAccounts(d.accounts||[]);
     renderLastRun(d.lastRun);
     renderPc(d.accounts||[]);
     renderPcSummary(d.pcSummary);
+    var _mf=cronExpr.trim().split(' ').filter(Boolean)[0]||'*';
+    var _step=_mf.indexOf('/')>=0?parseInt(_mf.split('/')[1],10)||1:1;
+    $('#cronInfo').textContent='每 '+_step+' 分钟（'+cronExpr+'）';
   }
 
   function renderPcSummary(s){
@@ -274,6 +291,36 @@ export const adminHtml = `<!doctype html>
     });
   }
 
+  // 下次 Cron 运行倒计时（仅对「每 N 分钟」这类简单表达式估算）
+  function tickNextRun(){
+    var el=document.getElementById('nextRun');
+    if(!el)return;
+    if(!cronExpr)return;
+    var now=Date.now();
+    var fields=cronExpr.trim().split(' ').filter(Boolean);
+    var minuteField=fields[0]||'*';
+    var step=1;
+    if(minuteField.indexOf('/')>=0)step=parseInt(minuteField.split('/')[1],10)||1;
+    if(fields.length>=5 && minuteField.indexOf('/')>=0){
+      // 以服务端时间为基准推算下一个整分步长（serverTime 校准过偏移）
+      var offset=now-serverTime;
+      var base=new Date(serverTime+offset);
+      var past=base.getMinutes()%step;
+      var next=new Date(base.getTime()+(step-past)*60000);
+      el.textContent=fmtTime(next.getTime());
+    }else{
+      el.textContent='('+cronExpr+')';
+    }
+    // 心跳随时间漂移，需周期性刷新文字
+    var hb=document.getElementById('heartbeat');
+    if(hb && lastRunTs){
+      var gapMin=Math.floor((now-lastRunTs)/60000);
+      if(gapMin<=2){hb.textContent='正常（'+gapMin+'分钟前）';hb.style.color='var(--ok)';}
+      else if(gapMin<=10){hb.textContent='偏久（'+gapMin+'分钟前）';hb.style.color='var(--warn)';}
+      else{hb.textContent='异常·可能停摆（'+gapMin+'分钟前）';hb.style.color='var(--danger)';}
+    }
+  }
+
   async function loadKvStats(){
     try{
       var r=await api('/api/kv/stats'); var d=await r.json();
@@ -313,11 +360,27 @@ export const adminHtml = `<!doctype html>
 
   function renderLastRun(lr){
     var el=$('#runState');
-    if(!lr){el.className='tag';el.textContent='尚未运行';return;}
+    if(!lr){
+      el.className='tag';el.textContent='尚未运行';
+      $('#lastRunTime').textContent='—';
+      $('#lastRunTrigger').textContent='—';
+      $('#heartbeat').textContent='未见运行';
+      $('#heartbeat').style.color='var(--muted)';
+      return;
+    }
     var d=new Date(lr.ts);
     var okCount=(lr.results||[]).filter(function(r){return r.ok;}).length;
     el.className='tag '+((lr.results||[]).some(function(r){return !r.ok;})?'warn':'ok');
-    el.textContent='上次 '+d.toLocaleString()+' 成功 '+okCount+'/'+(lr.accountCount||0);
+    el.textContent='上次 '+fmtTime(lr.ts)+' 成功 '+okCount+'/'+(lr.accountCount||0);
+    lastRunTs=lr.ts||0;
+    $('#lastRunTime').textContent=fmtTime(lr.ts);
+    $('#lastRunTrigger').textContent=(lr.trigger==='cron'?'定时(Cron)':'手动');
+    // 心跳：距上次运行超过 2 分钟视为异常（说明 Cron 可能未触发）
+    var gapMin=Math.floor((Date.now()-lr.ts)/60000);
+    var hb=$('#heartbeat');
+    if(gapMin<=2){hb.textContent='正常（'+gapMin+'分钟前）';hb.style.color='var(--ok)';}
+    else if(gapMin<=10){hb.textContent='偏久（'+gapMin+'分钟前）';hb.style.color='var(--warn)';}
+    else{hb.textContent='异常·可能停摆（'+gapMin+'分钟前）';hb.style.color='var(--danger)';}
   }
 
   function appendLogLine(text){
@@ -460,7 +523,8 @@ export const adminHtml = `<!doctype html>
       // 云电脑状态每 30 秒自动刷新（仅 GET /api/state，KV 只读不写，免费）
       setInterval(function(){loadState().catch(function(){});},30000);
       // 「已在线」时长每秒刷新一次（仅前端计算，不请求后端）
-      if(!tickStarted){tickStarted=true;setInterval(tickDurations,1000);}
+      if(!tickStarted){tickStarted=true;setInterval(function(){tickDurations();tickNextRun();},1000);}
+      tickNextRun();
       // 日志仅在手动「立即运行」时通过流式实时展示，无需轮询 KV
     }catch(e){showLogin('');}
   }

@@ -92,6 +92,8 @@ app.get("/api/state", async (c) => {
     accounts,
     lastRun,
     pcSummary: { total: totalPc, online: onlinePc },
+    cronExpr: (c.env.CRON_EXPR || "*/1 * * * *"),
+    serverTime: Date.now(),
   });
 });
 
@@ -220,11 +222,17 @@ export async function runAll(env, trigger, logFn) {
   const kv = env.CTYUN_KV;
   if (!kv) return { ok: false, error: "未绑定 KV 命名空间 CTYUN_KV" };
 
+  const pad = (n) => String(n).padStart(2, "0");
+  const stamp = () => {
+    const d = new Date();
+    return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+  };
   const log = (m) => {
-    console.log(m);
+    const line = `[${stamp()}] ${m}`;
+    console.log(line);
     if (logFn) {
       try {
-        logFn(m);
+        logFn(line);
       } catch (_) {
         /* 忽略推送异常 */
       }
