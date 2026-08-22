@@ -121,4 +121,31 @@ let id1;
   ok("RunLog 采集与 drain");
 }
 
+// ---- KV 写入最小化：setAccountStatus 内容未变则跳过 ----
+{
+  const kv = makeKv();
+  const { setAccountStatus, getAccountStatus, setLastRun } = await import("../src/config.js");
+  const payload = { ts: 1, user: "u1", ok: true, error: "", desktops: [{ a: 1 }] };
+  let writes = 0;
+  const origPut = kv.put;
+  kv.put = async (k, v) => { writes++; return origPut(k, v); };
+
+  await setAccountStatus(kv, "u1", payload);
+  assert.strictEqual(writes, 1, "首次写入应 +1");
+  await setAccountStatus(kv, "u1", { ...payload }); // 内容相同
+  assert.strictEqual(writes, 1, "内容未变应跳过写入");
+  await setAccountStatus(kv, "u1", { ...payload, ok: false }); // 内容变化
+  assert.strictEqual(writes, 2, "内容变化应再写一次");
+  const st = await getAccountStatus(kv, "u1");
+  assert.strictEqual(st.ok, false);
+  ok("setAccountStatus 内容未变跳过写入（省 KV 额度）");
+
+  // setLastRun 合并 _meta 到同一键
+  await setLastRun(kv, { trigger: "cron", ts: 123, results: [] });
+  const raw = await kv.get("lastRun");
+  const parsed = JSON.parse(raw);
+  assert.ok(parsed._meta && parsed._meta.ts, "lastRun 应内嵌 _meta（不再单独写 lastRunMeta）");
+  ok("setLastRun 内嵌 _meta（省一次 put）");
+}
+
 console.log("\nstore 测试全部通过：" + passed + " 项");

@@ -269,8 +269,16 @@ export class CtYunApi {
   }
 
   // ---- 会话缓存（减少验证码 OCR 压力）----
+  // 仅在内容变化时才写入，且 10 分钟内不重复写，避免重登录风暴打满 KV 免费额度
   async _saveSession(user) {
     if (!this.kv || !this.loginInfo) return;
+    try {
+      const next = JSON.stringify(this.loginInfo);
+      const prev = await this.kv.get("session:" + user);
+      if (prev === next) return; // 未变化，跳过
+    } catch {
+      /* 读失败则继续写 */
+    }
     try {
       await this.kv.put("session:" + user, JSON.stringify(this.loginInfo));
     } catch (e) {

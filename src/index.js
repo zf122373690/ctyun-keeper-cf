@@ -271,17 +271,17 @@ export async function runAll(env, trigger, logFn) {
   // Cron 节流（≥10 分钟才写一次），进一步压低 KV 写入量。
   let writeLastRun = true;
   if (trigger === "cron") {
-    const metaRaw = await kv.get("lastRunMeta");
-    const last = metaRaw ? JSON.parse(metaRaw).ts || 0 : 0;
+    const metaRaw = await kv.get("lastRun");
+    const last = metaRaw ? JSON.parse(metaRaw)._meta?.ts || 0 : 0;
     if (Date.now() - last < 10 * 60 * 1000) writeLastRun = false;
   }
   if (writeLastRun) {
-    await setLastRun(kv, summary);
-    await kv.put("lastRunMeta", JSON.stringify({ ts: Date.now() }));
+    await setLastRun(kv, summary); // setLastRun 内部已合并 _meta，省一次 put
   }
 
   // 云电脑状态（账号信息，允许写入 KV）：手动运行必写；
   // Cron 与 lastRun 共用节流（≥10 分钟一次），避免打满 KV 写入额度。
+  // setAccountStatus 内部做了「内容未变则跳过」的优化，进一步省写入。
   const writeStatus = trigger === "manual" || writeLastRun;
   if (writeStatus) {
     for (const r of results) {
