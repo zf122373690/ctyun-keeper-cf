@@ -114,7 +114,7 @@ export const adminHtml = `<!doctype html>
       </div>
       <div class="runstat">
         <span class="runstat-item">自动保活：<b id="cronInfo">—</b></span>
-        <span class="runstat-item">状态更新于：<b id="lastRunTime">—</b></span>
+        <span class="runstat-item">上次 Cron 执行：<b id="lastRunTime">—</b></span>
         <span class="runstat-item">来源：<b id="lastRunTrigger">—</b></span>
         <span class="runstat-item">下次运行约：<b id="nextRun">—</b></span>
         <span class="runstat-item">心跳：<b id="heartbeat">—</b></span>
@@ -171,9 +171,10 @@ export const adminHtml = `<!doctype html>
 
   var editingId=null;
   var tickStarted=false;
-  var cronExpr='*/1 * * * *';
+  var cronExpr='*/10 * * * *';
   var serverTime=Date.now();
   var snapshotTs=0;
+  var cronLastSeen=0; // Cron 真实执行时间戳（来自 KV cronHeartbeat）
 
   function toast(msg){
     var t=$('#toast'); t.textContent=msg; t.classList.add('show');
@@ -198,8 +199,9 @@ export const adminHtml = `<!doctype html>
     var r=await api('/api/state');
     var d=await r.json();
     $('#keepAliveSeconds').value=d.keepAliveSeconds||55;
-    cronExpr=d.cronExpr||'*/1 * * * *';
+    cronExpr=d.cronExpr||'*/10 * * * *';
     serverTime=d.serverTime||Date.now();
+    cronLastSeen=d.cronLastSeen||0;
     renderAccounts(d.accounts||[]);
     var _mf=cronExpr.trim().split(' ').filter(Boolean)[0]||'*';
     var _step=_mf.indexOf('/')>=0?parseInt(_mf.split('/')[1],10)||1:1;
@@ -215,8 +217,10 @@ export const adminHtml = `<!doctype html>
     renderPc(d.accounts||[]);
     renderPcSummary(d.pcSummary);
     snapshotTs=d.ts||Date.now();
-    $('#lastRunTime').textContent=fmtTime(snapshotTs);
-    $('#lastRunTrigger').textContent='实时查询';
+    // 展示 Cron 真实执行时间（比"页面打开时间"更能说明定时任务是否在跑）
+    $('#lastRunTime').textContent=cronLastSeen?fmtTime(cronLastSeen):'—';
+    $('#lastRunTrigger').textContent=cronLastSeen?'定时(Cron)':'—';
+    renderHeartbeat();
   }
 
   function renderPcSummary(s){
@@ -362,19 +366,20 @@ export const adminHtml = `<!doctype html>
     });
   }
 
-  // 心跳：基于最近一次快照查询时间（snapshotTs）估算，
-  // 不再依赖 KV 里的 lastRun（已移除）。超过 10 分钟未刷新视为异常。
+  // 心跳：基于 Cron 真实执行时间戳（cronLastSeen）判断，
+  // 这是 KV 里 cronHeartbeat 记录的实际触发时间，比"页面打开时间"更权威。
+  // Cron 每 10 分钟触发一次，故超过 15 分钟无心跳即视为异常（可能停摆）。
   function renderHeartbeat(){
     var hb=$('#heartbeat');
     if(!hb)return;
-    if(!snapshotTs){
-      hb.textContent='未见状态';
+    if(!cronLastSeen){
+      hb.textContent='未见 Cron 执行记录';
       hb.style.color='var(--muted)';
       return;
     }
-    var gapMin=Math.floor((Date.now()-snapshotTs)/60000);
-    if(gapMin<=2){hb.textContent='正常（'+gapMin+'分钟前）';hb.style.color='var(--ok)';}
-    else if(gapMin<=10){hb.textContent='偏久（'+gapMin+'分钟前）';hb.style.color='var(--warn)';}
+    var gapMin=Math.floor((Date.now()-cronLastSeen)/60000);
+    if(gapMin<=15){hb.textContent='正常（'+gapMin+'分钟前）';hb.style.color='var(--ok)';}
+    else if(gapMin<=30){hb.textContent='偏久（'+gapMin+'分钟前）';hb.style.color='var(--warn)';}
     else{hb.textContent='异常·可能停摆（'+gapMin+'分钟前）';hb.style.color='var(--danger)';}
   }
 

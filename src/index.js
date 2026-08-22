@@ -76,11 +76,20 @@ app.get("/api/state", async (c) => {
     password: a.password ? "********" : "",
     deviceCode: a.deviceCode ? "已设置" : "未设置",
   }));
+  // cronHeartbeat：Cron 实际执行时间戳（仅用于页面心跳判断，不存日志）
+  // 每天 144 次（每 10 分钟一次）写入，远低于免费版 1000 次/天限额。
+  let cronLastSeen = 0;
+  try {
+    const hb = await kv.get("cronHeartbeat");
+    cronLastSeen = hb ? Number(hb) || 0 : 0;
+  } catch { /* 读失败则视为 0 */ }
+
   return c.json({
     keepAliveSeconds: cfg.keepAliveSeconds,
     accounts,
-    cronExpr: (c.env.CRON_EXPR || "*/1 * * * *"),
+    cronExpr: (c.env.CRON_EXPR || "*/10 * * * *"),
     serverTime: Date.now(),
+    cronLastSeen,
   });
 });
 
@@ -291,7 +300,14 @@ export async function runAll(env, trigger, logFn) {
 export default {
   fetch: (request, env, ctx) => app.fetch(request, env, ctx),
   async scheduled(event, env, ctx) {
-    // Cron 触发：日志只打 console，不推页面（通常无人在线查看），也不写 KV
+    // Cron 触发：先写心跳时间戳（证明 Cron 真的跑了），再跑保活。
+    // 心跳键独立写入，即便后续 runAll 出错也能反映"Cron 已触发"。
+    if (env.CTYUN_KV) {
+      try {
+        await env.CTYUN_KV.put("cronHeartbeat", String(Date.now()));
+      } catch { /* 忽略写入异常 */ }
+    }
+    // 日志只打 console，不推页面（通常无人在线查看），也不写 KV
     ctx.waitUntil(runAll(env, "cron", null));
   },
 };
