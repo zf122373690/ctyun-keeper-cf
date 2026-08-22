@@ -259,7 +259,7 @@ export const adminHtml = `<!doctype html>
     var keepLine = isErr ? '' :
       '<div><b>本次</b>'+(kept
         ? '<span class="tag ok" style="padding:1px 6px">保活中</span>'
-        : '<span class="tag warn" style="padding:1px 6px">未接管</span>')+'</div>';
+        : '<span class="tag" style="padding:1px 6px;color:var(--muted);border-color:var(--border)">查看中</span>')+'</div>';
     return '<div class="pc-card">'+badge+
       '<div class="pc-name">'+esc(name)+'</div>'+
       '<div class="pc-code">编号：'+esc(code)+'</div>'+

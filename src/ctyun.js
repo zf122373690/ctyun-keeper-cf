@@ -583,7 +583,8 @@ export async function queryStatus(api, account, log) {
       online,
       keptAlive: false, // 实时查询不保活，故恒为 false
       onlineSince: online ? loginTs : null,
-      keepAliveStart: loginTs,
+      // 仅状态查看，未真正接管保活，保活起始置空（语义诚实）
+      keepAliveStart: null,
     };
   });
   return { user: account.user, ok: true, error: "", desktops };
