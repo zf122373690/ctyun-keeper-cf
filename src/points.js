@@ -3,6 +3,37 @@ const TASK_URL = "https://desk.ctyun.cn/selforder/api/marketing/userPoints/getTa
 const REWARD_URL = "https://desk.ctyun.cn/selforder/api/selforder/prod/get?prodId=17000000&prodCode=POINTS";
 const ORDER_URL = "https://desk.ctyun.cn/selforder/api/selforder/paas/placeOrder";
 
+function asList(data) {
+  if (Array.isArray(data)) return data;
+  if (Array.isArray(data?.records)) return data.records;
+  if (Array.isArray(data?.list)) return data.list;
+  return [];
+}
+
+export async function getPointsOptions(api) {
+  const desktops = await api.getDesktopList();
+  if (desktops === null) return { ok: false, error: "登录会话已失效，无法读取云电脑" };
+  const rewardResp = await api._request(REWARD_URL);
+  if (rewardResp?.code !== 0) {
+    return { ok: false, error: rewardResp?.msg || "无法读取可兑换奖励", desktops: [] };
+  }
+  const rewards = asList(rewardResp.data).map((item) => ({
+    prodId: item.prodId,
+    prodName: item.prodName || item.name || "未命名奖励",
+    prodType: item.prodType,
+    costPoints: item.costPoints ?? item.points ?? item.price ?? 0,
+  }));
+  return {
+    ok: true,
+    desktops: desktops.map((d) => ({
+      desktopId: String(d.desktopId ?? ""),
+      name: d.desktopName || d.computerName || d.desktopCode || "未命名云电脑",
+      status: d.useStatusText || "未知",
+    })),
+    rewards,
+  };
+}
+
 export function buildOrderPayload(config, times) {
   const count = Math.max(1, Number(times) || 1);
   return {

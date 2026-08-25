@@ -146,15 +146,17 @@ export const adminHtml = `<!doctype html>
       </div>
       <div class="row">
         <div><label><input id="f_points_enabled" type="checkbox" style="width:auto;margin-right:6px" />启用积分兑换</label></div>
-        <div><label>兑换绑定云电脑 ID</label><input id="f_points_desktop" placeholder="desktopId" /></div>
-        <div><label>奖励 prodId</label><input id="f_points_prod" type="number" placeholder="prodId" /></div>
-        <div><label>奖励 prodType</label><input id="f_points_type" placeholder="prodType" /></div>
+        <div><label>兑换绑定云电脑 ID</label><input id="f_points_desktop" placeholder="点击自动读取后选择" /></div>
+        <div><label>奖励 prodId</label><input id="f_points_prod" type="number" placeholder="自动读取" /></div>
+        <div><label>奖励 prodType</label><input id="f_points_type" placeholder="自动读取" /></div>
       </div>
       <div class="row">
-        <div><label>单次所需积分</label><input id="f_points_cost" type="number" min="1" placeholder="例如 300" /></div>
+        <div><label>单次所需积分</label><input id="f_points_cost" type="number" min="1" placeholder="自动读取" /></div>
         <div><label>每轮最多兑换次数（0=按余额）</label><input id="f_points_max" type="number" min="0" value="0" /></div>
+        <div><label>奖励选择</label><select id="f_points_reward" style="width:100%;background:#0f172a;border:1px solid var(--border);color:var(--text);padding:9px 10px;font-size:14px"><option value="">先点击自动读取</option></select></div>
       </div>
       <div class="btnrow">
+        <button id="loadPointsBtn" class="ghost" type="button">自动读取云电脑和奖励</button>
         <button id="saveAcc">保存账号</button>
         <button id="cancelEdit" class="ghost" hidden>取消编辑</button>
         <span id="accMsg" style="color:var(--muted);font-size:12px"></span>
@@ -427,6 +429,31 @@ export const adminHtml = `<!doctype html>
     await loadState();
   }
 
+  async function loadPointsOptions(){
+    if(!editingId){$('#accMsg').textContent='请先保存账号，再读取云电脑和奖励';return;}
+    $('#loadPointsBtn').disabled=true; $('#accMsg').textContent='正在读取账号信息…';
+    try{
+      var r=await api('/api/accounts/'+editingId+'/points-options');
+      var d=await r.json();
+      if(!r.ok||!d.ok){$('#accMsg').textContent=d.error||'读取失败';return;}
+      var ds=d.desktops||[];
+      if(ds.length)$('#f_points_desktop').value=ds[0].desktopId;
+      var sel=$('#f_points_reward'); sel.innerHTML='';
+      (d.rewards||[]).forEach(function(x){
+        var o=document.createElement('option');
+        o.value=JSON.stringify(x); o.textContent=(x.prodName||'未命名奖励')+' · '+(x.costPoints||'?')+'积分'; sel.appendChild(o);
+      });
+      if(sel.options.length){sel.selectedIndex=0;applyRewardSelection();}
+      $('#accMsg').textContent='已读取 '+ds.length+' 台云电脑、'+(d.rewards||[]).length+' 个奖励';
+    }catch(e){if(e.message!=='unauthorized')$('#accMsg').textContent='读取失败';}
+    finally{$('#loadPointsBtn').disabled=false;}
+  }
+
+  function applyRewardSelection(){
+    var raw=$('#f_points_reward').value;if(!raw)return;
+    try{var x=JSON.parse(raw);$('#f_points_prod').value=x.prodId||'';$('#f_points_type').value=x.prodType||'';$('#f_points_cost').value=x.costPoints||'';}catch(e){}
+  }
+
   function startEdit(id){
     api('/api/state').then(function(r){return r.json();}).then(function(d){
       var a=(d.accounts||[]).find(function(x){return x.id===id;});
@@ -556,6 +583,8 @@ export const adminHtml = `<!doctype html>
   };
   $('#tokenInput').addEventListener('keydown',function(e){if(e.key==='Enter')$('#loginBtn').click();});
   $('#saveAcc').onclick=saveAcc;
+  $('#loadPointsBtn').onclick=loadPointsOptions;
+  $('#f_points_reward').onchange=applyRewardSelection;
   $('#cancelEdit').onclick=resetForm;
   $('#saveSettings').onclick=saveSettings;
   $('#runBtn').onclick=runNow;

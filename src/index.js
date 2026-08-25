@@ -38,7 +38,7 @@ import {
   setKeepAlive,
   saveConfig,
 } from "./config.js";
-import { runPointsMaintenance } from "./points.js";
+import { getPointsOptions, runPointsMaintenance } from "./points.js";
 
 const app = new Hono();
 
@@ -125,6 +125,24 @@ app.get("/api/snapshot", async (c) => {
     pcSummary: { total: totalPc, online: onlinePc },
     accounts: results,
   });
+});
+
+// 读取积分配置候选项：云电脑和可兑换奖励均来自天翼云接口，不写 KV。
+app.get("/api/accounts/:id/points-options", async (c) => {
+  const kv = c.env.CTYUN_KV;
+  const cfg = await loadConfig(kv);
+  const account = cfg.accounts.find((a) => a.id === c.req.param("id"));
+  if (!account) return c.json({ error: "账号不存在" }, 404);
+  if (!account.user || !account.password) return c.json({ error: "账号密码未填写" }, 400);
+  const deviceCode = await resolveDeviceCode(kv, account);
+  const api = new CtYunApi(deviceCode, kv, () => {});
+  const cached = await api.loadSession(account.user);
+  if (cached) api.loginInfo = cached;
+  if (!api.loginInfo && !(await api.login(account.user, account.password))) {
+    return c.json({ error: "登录失败，无法读取账号信息" }, 502);
+  }
+  const result = await getPointsOptions(api);
+  return c.json(result, result.ok ? 200 : 502);
 });
 
 // ---- 账号增删改 ----
