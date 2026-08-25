@@ -36,7 +36,9 @@ import {
   updateAccount,
   deleteAccount,
   setKeepAlive,
+  saveConfig,
 } from "./config.js";
+import { runPointsMaintenance } from "./points.js";
 
 const app = new Hono();
 
@@ -75,6 +77,7 @@ app.get("/api/state", async (c) => {
     hasPassword: !!a.password,
     password: a.password ? "********" : "",
     deviceCode: a.deviceCode ? "已设置" : "未设置",
+    points: a.points || { enabled: false },
   }));
   // cronHeartbeat：Cron 实际执行时间戳（仅用于页面心跳判断，不存日志）
   // 每天 144 次（每 10 分钟一次）写入，远低于免费版 1000 次/天限额。
@@ -282,6 +285,13 @@ export async function runAll(env, trigger, logFn) {
     const deviceCode = await resolveDeviceCode(kv, acc);
     const api = new CtYunApi(deviceCode, kv, log);
     const r = await runAccount(api, acc, keepAliveSeconds, log);
+    if (api.loginInfo) {
+      await runPointsMaintenance(api, acc, log, async (next) => {
+        const latest = await loadConfig(kv);
+        const item = latest.accounts.find((x) => x.id === acc.id);
+        if (item) { item.points = next.points; await saveConfig(kv, latest); }
+      });
+    }
     results.push(r);
   }
 
@@ -300,9 +310,9 @@ export async function runAll(env, trigger, logFn) {
 export default {
   fetch: (request, env, ctx) => app.fetch(request, env, ctx),
   async scheduled(event, env, ctx) {
-    // Cron 触发：先写心跳时间戳（证明 Cron 真的跑了），再跑保活。
-    // 心跳键独立写入，即便后续 runAll 出错也能反映"Cron 已触发"。
-    if (env.CTYUN_KV) {
+    // 每分钟运行保活；心跳每 10 分钟写一次，控制 KV 写入量。
+    const minute = new Date().getUTCMinutes();
+    if (env.CTYUN_KV && minute % 10 === 0) {
       try {
         await env.CTYUN_KV.put("cronHeartbeat", String(Date.now()));
       } catch { /* 忽略写入异常 */ }

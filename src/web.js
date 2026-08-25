@@ -144,6 +144,16 @@ export const adminHtml = `<!doctype html>
         <div><label>密码</label><input id="f_password" type="password" placeholder="密码（编辑时留空=不变）" autocomplete="off" /></div>
         <div><label>设备码 deviceCode</label><input id="f_device" placeholder="留空则自动生成" /></div>
       </div>
+      <div class="row">
+        <div><label><input id="f_points_enabled" type="checkbox" style="width:auto;margin-right:6px" />启用积分兑换</label></div>
+        <div><label>兑换绑定云电脑 ID</label><input id="f_points_desktop" placeholder="desktopId" /></div>
+        <div><label>奖励 prodId</label><input id="f_points_prod" type="number" placeholder="prodId" /></div>
+        <div><label>奖励 prodType</label><input id="f_points_type" placeholder="prodType" /></div>
+      </div>
+      <div class="row">
+        <div><label>单次所需积分</label><input id="f_points_cost" type="number" min="1" placeholder="例如 300" /></div>
+        <div><label>每轮最多兑换次数（0=按余额）</label><input id="f_points_max" type="number" min="0" value="0" /></div>
+      </div>
       <div class="btnrow">
         <button id="saveAcc">保存账号</button>
         <button id="cancelEdit" class="ghost" hidden>取消编辑</button>
@@ -397,8 +407,9 @@ export const adminHtml = `<!doctype html>
     var user=$('#f_user').value.trim();
     var password=$('#f_password').value;
     var device=$('#f_device').value.trim();
+    var points={enabled:$('#f_points_enabled').checked,desktopId:$('#f_points_desktop').value.trim(),prodId:parseInt($('#f_points_prod').value,10)||0,prodType:$('#f_points_type').value.trim(),costPoints:parseInt($('#f_points_cost').value,10)||0,maxRedeemTimes:parseInt($('#f_points_max').value,10)||0,scheduleType:'daily'};
     if(!user){$('#accMsg').textContent='账号必填';return;}
-    var payload={name:name,user:user,password:password,deviceCode:device};
+    var payload={name:name,user:user,password:password,deviceCode:device,points:points};
     var r, d;
     try{
       if(editingId){
@@ -425,6 +436,13 @@ export const adminHtml = `<!doctype html>
       $('#f_user').value=a.user||'';
       $('#f_password').value='';
       $('#f_device').value=(a.deviceCode==='已设置'?'':'');
+      var p=a.points||{};
+      $('#f_points_enabled').checked=p.enabled===true;
+      $('#f_points_desktop').value=p.desktopId||'';
+      $('#f_points_prod').value=p.prodId||'';
+      $('#f_points_type').value=p.prodType||'';
+      $('#f_points_cost').value=p.costPoints||'';
+      $('#f_points_max').value=p.maxRedeemTimes||0;
       $('#formTitle').textContent='编辑账号';
       $('#cancelEdit').hidden=false;
       $('#saveAcc').textContent='更新账号';
@@ -436,6 +454,7 @@ export const adminHtml = `<!doctype html>
     editingId=null;
     $('#f_name').value='';$('#f_user').value='';
     $('#f_password').value='';$('#f_device').value='';
+    $('#f_points_enabled').checked=false;$('#f_points_desktop').value='';$('#f_points_prod').value='';$('#f_points_type').value='';$('#f_points_cost').value='';$('#f_points_max').value='0';
     $('#formTitle').textContent='添加账号';
     $('#cancelEdit').hidden=true;
     $('#saveAcc').textContent='保存账号';

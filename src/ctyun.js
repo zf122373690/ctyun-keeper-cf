@@ -3,6 +3,7 @@
 
 import { sha256Hex, md5Hex, base64ToBytes, bytesToBase64, bytesToHex, utf8ToBytes } from "./crypto.js";
 import { SendInfo, Encryption } from "./framing.js";
+import { pollPointsTask } from "./points.js";
 
 const ORC_URL = "https://orc.1999111.xyz/ocr";
 const VERSION = "103020001";
@@ -300,7 +301,7 @@ export class CtYunApi {
 }
 
 // ---- WebSocket 保活（单台云电脑，窗口期内自动重连）----
-function keepaliveWorker(api, account, desktop, keepAliveSeconds, desktopInfo, log) {
+function keepaliveWorker(api, account, desktop, keepAliveSeconds, desktopInfo, log, activityTick) {
   const label = `${account.user}/${desktop.desktopCode || ""}`;
   const clinkHost = desktopInfo.clinkLvsOutHost || "";
   const desktopId = desktop.desktopId;
@@ -329,6 +330,9 @@ function keepaliveWorker(api, account, desktop, keepAliveSeconds, desktopInfo, l
     let connects = 0;
 
     const timer = setTimeout(() => finish(), (keepAliveSeconds + 15) * 1000);
+    const activityTimer = activityTick
+      ? setInterval(() => { activityTick().catch((e) => log(`[${label}] 活动接口失败: ${e}`)); }, 10000)
+      : null;
     const checker = setInterval(() => {
       if (Date.now() >= deadline) finish();
     }, 1000);
@@ -338,6 +342,7 @@ function keepaliveWorker(api, account, desktop, keepAliveSeconds, desktopInfo, l
       done = true;
       clearTimeout(timer);
       clearInterval(checker);
+      if (activityTimer) clearInterval(activityTimer);
       try { ws && ws.close(); } catch {}
       resolve();
     }
@@ -389,8 +394,9 @@ function keepaliveWorker(api, account, desktop, keepAliveSeconds, desktopInfo, l
         return;
       }
       ws.binaryType = "arraybuffer";
-      ws.addEventListener("open", () => {
-        log(`[${label}] WebSocket 已连接`);
+    ws.addEventListener("open", () => {
+      log(`[${label}] WebSocket 已连接`);
+      if (activityTick) activityTick().catch((e) => log(`[${label}] 活动接口失败: ${e}`));
         ws.send(JSON.stringify(connectMessage));
         setTimeout(() => {
           try {
@@ -483,6 +489,9 @@ export async function runAccount(api, account, keepAliveSeconds, log) {
   }
 
   const active = [];
+  const activityTick = account.points?.enabled
+    ? () => pollPointsTask(api, account, log)
+    : null;
   for (const desktop of desktopList) {
     const st = statusMap.get(desktop.desktopId);
     if (desktop.useStatusText !== "运行中") {
@@ -523,7 +532,7 @@ export async function runAccount(api, account, keepAliveSeconds, log) {
   try {
     await Promise.all(
       active.map((d) =>
-        keepaliveWorker(api, account, d, keepAliveSeconds, d._desktopInfo, log)
+        keepaliveWorker(api, account, d, keepAliveSeconds, d._desktopInfo, log, activityTick)
       )
     );
     result.ok = true;
