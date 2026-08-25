@@ -409,7 +409,9 @@ export const adminHtml = `<!doctype html>
     var user=$('#f_user').value.trim();
     var password=$('#f_password').value;
     var device=$('#f_device').value.trim();
-    var points={enabled:$('#f_points_enabled').checked,desktopId:$('#f_points_desktop').value.trim(),prodId:parseInt($('#f_points_prod').value,10)||0,prodType:$('#f_points_type').value.trim(),costPoints:parseInt($('#f_points_cost').value,10)||0,maxRedeemTimes:parseInt($('#f_points_max').value,10)||0,scheduleType:'daily'};
+    var selectedReward=$('#f_points_reward').value;
+    var selectedRewardData={}; try{selectedRewardData=selectedReward?JSON.parse(selectedReward):{};}catch(e){}
+    var points={enabled:$('#f_points_enabled').checked,desktopId:$('#f_points_desktop').value.trim(),prodId:parseInt($('#f_points_prod').value,10)||0,prodName:selectedRewardData.prodName||'',prodType:$('#f_points_type').value.trim(),costPoints:parseInt($('#f_points_cost').value,10)||0,maxRedeemTimes:parseInt($('#f_points_max').value,10)||0,scheduleType:'daily'};
     if(!user){$('#accMsg').textContent='账号必填';return;}
     var payload={name:name,user:user,password:password,deviceCode:device,points:points};
     var r, d;
@@ -443,8 +445,9 @@ export const adminHtml = `<!doctype html>
         var o=document.createElement('option');
         o.value=JSON.stringify(x); o.textContent=(x.prodName||'未命名奖励')+' · '+(x.costPoints||'?')+'积分'; sel.appendChild(o);
       });
-      if(sel.options.length){sel.selectedIndex=0;applyRewardSelection();}
-      $('#accMsg').textContent='已读取 '+ds.length+' 台云电脑、'+(d.rewards||[]).length+' 个奖励';
+      if(sel.options.length){sel.selectedIndex=(d.recommendedRewardIndex>=0?d.recommendedRewardIndex:0);applyRewardSelection();}
+      var picked=(d.recommendedRewardIndex>=0&&d.rewards[d.recommendedRewardIndex])?d.rewards[d.recommendedRewardIndex].prodName:'';
+      $('#accMsg').textContent='已读取 '+ds.length+' 台云电脑、'+(d.rewards||[]).length+' 个奖励'+(picked?'，已优先选择 '+picked:'，未发现 8c16g 商品');
     }catch(e){if(e.message!=='unauthorized')$('#accMsg').textContent='读取失败';}
     finally{$('#loadPointsBtn').disabled=false;}
   }

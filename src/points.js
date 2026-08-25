@@ -23,6 +23,8 @@ export async function getPointsOptions(api) {
     prodType: item.prodType,
     costPoints: item.costPoints ?? item.points ?? item.price ?? 0,
   }));
+  const isEightCore = (name) => /8\s*(?:c|核)\s*16\s*g/i.test(String(name || ""));
+  const recommendedRewardIndex = rewards.findIndex((item) => isEightCore(item.prodName));
   return {
     ok: true,
     desktops: desktops.map((d) => ({
@@ -31,6 +33,7 @@ export async function getPointsOptions(api) {
       status: d.useStatusText || "未知",
     })),
     rewards,
+    recommendedRewardIndex,
   };
 }
 
