@@ -87,7 +87,7 @@ app.get("/api/state", async (c) => {
   return c.json({
     keepAliveSeconds: cfg.keepAliveSeconds,
     accounts,
-    cronExpr: (c.env.CRON_EXPR || "*/10 * * * *"),
+    cronExpr: (c.env.CRON_EXPR || "*/1 * * * *"),
     serverTime: Date.now(),
     cronLastSeen,
   });

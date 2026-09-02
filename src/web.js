@@ -171,7 +171,7 @@ export const adminHtml = `<!doctype html>
 
   var editingId=null;
   var tickStarted=false;
-  var cronExpr='*/10 * * * *';
+  var cronExpr='*/1 * * * *';
   var serverTime=Date.now();
   var snapshotTs=0;
   var cronLastSeen=0; // Cron 真实执行时间戳（来自 KV cronHeartbeat）
@@ -199,7 +199,7 @@ export const adminHtml = `<!doctype html>
     var r=await api('/api/state');
     var d=await r.json();
     $('#keepAliveSeconds').value=d.keepAliveSeconds||55;
-    cronExpr=d.cronExpr||'*/10 * * * *';
+    cronExpr=d.cronExpr||'*/1 * * * *';
     serverTime=d.serverTime||Date.now();
     cronLastSeen=d.cronLastSeen||0;
     renderAccounts(d.accounts||[]);
