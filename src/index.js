@@ -36,9 +36,7 @@ import {
   updateAccount,
   deleteAccount,
   setKeepAlive,
-  saveConfig,
 } from "./config.js";
-import { getPointsOptions, runPointsMaintenance } from "./points.js";
 
 const app = new Hono();
 
@@ -77,7 +75,6 @@ app.get("/api/state", async (c) => {
     hasPassword: !!a.password,
     password: a.password ? "********" : "",
     deviceCode: a.deviceCode ? "已设置" : "未设置",
-    points: a.points || { enabled: false },
   }));
   // cronHeartbeat：Cron 实际执行时间戳（仅用于页面心跳判断，不存日志）
   // 每天 144 次（每 10 分钟一次）写入，远低于免费版 1000 次/天限额。
@@ -125,24 +122,6 @@ app.get("/api/snapshot", async (c) => {
     pcSummary: { total: totalPc, online: onlinePc },
     accounts: results,
   });
-});
-
-// 读取积分配置候选项：云电脑和可兑换奖励均来自天翼云接口，不写 KV。
-app.get("/api/accounts/:id/points-options", async (c) => {
-  const kv = c.env.CTYUN_KV;
-  const cfg = await loadConfig(kv);
-  const account = cfg.accounts.find((a) => a.id === c.req.param("id"));
-  if (!account) return c.json({ error: "账号不存在" }, 404);
-  if (!account.user || !account.password) return c.json({ error: "账号密码未填写" }, 400);
-  const deviceCode = await resolveDeviceCode(kv, account);
-  const api = new CtYunApi(deviceCode, kv, () => {});
-  const cached = await api.loadSession(account.user);
-  if (cached) api.loginInfo = cached;
-  if (!api.loginInfo && !(await api.login(account.user, account.password))) {
-    return c.json({ error: "登录失败，无法读取账号信息" }, 502);
-  }
-  const result = await getPointsOptions(api);
-  return c.json(result, result.ok ? 200 : 502);
 });
 
 // ---- 账号增删改 ----
@@ -303,13 +282,6 @@ export async function runAll(env, trigger, logFn) {
     const deviceCode = await resolveDeviceCode(kv, acc);
     const api = new CtYunApi(deviceCode, kv, log);
     const r = await runAccount(api, acc, keepAliveSeconds, log);
-    if (api.loginInfo) {
-      await runPointsMaintenance(api, acc, log, async (next) => {
-        const latest = await loadConfig(kv);
-        const item = latest.accounts.find((x) => x.id === acc.id);
-        if (item) { item.points = next.points; await saveConfig(kv, latest); }
-      });
-    }
     results.push(r);
   }
 

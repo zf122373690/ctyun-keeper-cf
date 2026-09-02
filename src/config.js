@@ -43,6 +43,11 @@ export async function loadConfig(kv) {
       a.id = genId();
       changed = true;
     }
+    // 清理旧版本的积分/活动配置，当前项目只负责保活。
+    if (Object.prototype.hasOwnProperty.call(a, "points")) {
+      delete a.points;
+      changed = true;
+    }
   }
   if (changed) await kv.put("config", JSON.stringify(cfg));
   return cfg;
@@ -77,7 +82,6 @@ export async function addAccount(kv, acc) {
     user: acc.user || "",
     password: acc.password || "",
     deviceCode: acc.deviceCode || "",
-    points: normalizePoints(acc.points),
   };
   cfg.accounts.push(item);
   await saveConfig(kv, cfg);
@@ -91,30 +95,12 @@ export async function updateAccount(kv, id, patch) {
   if (patch.name !== undefined) a.name = patch.name;
   if (patch.user !== undefined) a.user = patch.user;
   if (patch.deviceCode !== undefined) a.deviceCode = patch.deviceCode;
-  if (patch.points !== undefined) a.points = normalizePoints(patch.points);
   // 密码为空表示“保持不变”，避免编辑其它字段时误清空密码
   if (patch.password !== undefined && String(patch.password).length > 0) {
     a.password = patch.password;
   }
   await saveConfig(kv, cfg);
   return a;
-}
-
-export function normalizePoints(value) {
-  const p = value && typeof value === "object" ? value : {};
-  return {
-    enabled: p.enabled === true,
-    desktopId: String(p.desktopId || ""),
-    prodId: Number(p.prodId) || 0,
-    prodName: String(p.prodName || ""),
-    prodType: String(p.prodType || ""),
-    costPoints: Number(p.costPoints) || 0,
-    maxRedeemTimes: Math.max(0, Number(p.maxRedeemTimes) || 0),
-    scheduleType: ["daily", "interval_days", "monthly_days"].includes(p.scheduleType) ? p.scheduleType : "daily",
-    intervalDays: Math.max(1, Number(p.intervalDays) || 1),
-    monthlyDays: Array.isArray(p.monthlyDays) ? p.monthlyDays.map(Number).filter((n) => n === -1 || (n >= 1 && n <= 31)) : [],
-    lastRedeemDate: String(p.lastRedeemDate || ""),
-  };
 }
 
 export async function deleteAccount(kv, id) {
